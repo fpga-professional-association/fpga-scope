@@ -21,8 +21,8 @@ Tracker: [issue #1](https://github.com/fpga-professional-association/fpga-scope/
 | M0 | Repo bootstrap: skeleton, CI, sim harness, INTERFACES.md v0 | [#2](https://github.com/fpga-professional-association/fpga-scope/issues/2) | done |
 | M0 | Primitive library `rtl/prim/`: ff_sync, sync/async FIFOs, 1r1w RAM | [#3](https://github.com/fpga-professional-association/fpga-scope/issues/3) | done |
 | M1 | Capture core: `scope_pkg` + `scope_core` + golden ref | [#4](https://github.com/fpga-professional-association/fpga-scope/issues/4) | done |
-| M2 | CSR block + INTERFACES.md v1 freeze | [#5](https://github.com/fpga-professional-association/fpga-scope/issues/5) | in progress |
-| M3 | Trigger engine: comparators + combine + sequencer | [#6](https://github.com/fpga-professional-association/fpga-scope/issues/6) | — |
+| M2 | CSR block + INTERFACES.md v1 freeze | [#5](https://github.com/fpga-professional-association/fpga-scope/issues/5) | done |
+| M3 | Trigger engine: comparators + combine + sequencer | [#6](https://github.com/fpga-professional-association/fpga-scope/issues/6) | in progress |
 | M4 | Pre-trigger + capture windows | [#7](https://github.com/fpga-professional-association/fpga-scope/issues/7) | — |
 | M5 | Drain + CDC + UART + `scope_top` assembly | [#8](https://github.com/fpga-professional-association/fpga-scope/issues/8) | — |
 | M6 | RLE encoder | [#9](https://github.com/fpga-professional-association/fpga-scope/issues/9) | — |

@@ -45,6 +45,7 @@ COMMON_SRCS=(
   "$RTL/prim/prim_fifo_async.sv"
   # -- core RTL (issues #4..#9): scope_core, then scope_csr, scope_trigger, scope_rle, scope_drain, scope_top
   "$RTL/scope_core.sv"
+  "$RTL/scope_csr.sv"
   # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
   # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
@@ -93,6 +94,7 @@ run_one tb_prim_ram.sv        tb_prim_ram         # issue #3: RAM read-during-wr
 run_one tb_prim_fifo_sync.sv  tb_prim_fifo_sync   # issue #3: sync FIFO fill/drain/boundary + scoreboard soak
 run_one tb_prim_fifo_async.sv tb_prim_fifo_async  # issue #3: async FIFO 3:1 / 1:3 / ~1:1 CDC soak, >=100k/leg
 run_one tb_capture_basic.sv   tb_capture_basic    # issue #4: scope_core capture bit-exact vs scope_ref.py
+run_one tb_csr.sv             tb_csr              # issue #5: CSR matrix, cfg_err lockout, BUF_DATA drain
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then

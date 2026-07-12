@@ -69,8 +69,25 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 | #3 | `prim_fifo_async` usable capacity is 2^`DEPTH_LOG2` + 1 (RAM ring + FWFT output stage); `prim_fifo_sync` capacity is exactly 2^`DEPTH_LOG2` | FWFT over a 1-cycle-latency RAM needs a prefetched output register. The sync FIFO counts that register inside its capacity budget (exact full flag, one RAM slot idles while the output stage holds data); the async FIFO cannot without adding a cross-domain count, so its extra stage adds one slot. Both are documented in INTERFACES.md and asserted in the TBs. |
 | #4 | After the last window `scope_core` parks in `DONE` until `arm`/`disarm`, instead of PLAN.md §5's "windows left? re-arm : IDLE" automatic return to IDLE | An automatic `DONE→IDLE` would make a completed capture indistinguishable from never-armed in `STATUS.state` while the host drains the buffer. `disarm` provides the `→IDLE` edge explicitly; intermediate windows still re-arm automatically. |
 | #4 | Per-window buffer partitioning is deferred to issue #7; in #4 each auto re-armed window reuses the full-depth budget (later windows overwrite earlier ones) | Issue #4's scope is full-depth capture with `windows=1`; #7 owns the windows semantics and TB. `windows_done` counting and the re-arm loop are wired now so the FSM shape is final. |
+| #5 | CSR map v1 adds `TRIG_INDEX` (9), `TSTRIG_LO` (10), `TSTRIG_HI` (11) — not in the PLAN.md draft map | A CSR-transport-only host (Avalon/AXI-Lite, issue #11) drains via `BUF_DATA` and never sees the DRAIN frame header, so without these registers it cannot reorder the circular buffer or timestamp the trigger. Freezing a map that makes the CSR transport unusable would be a spec bug. |
+| #5 | Wide comparator config uses a `CMP_SEL` + 16-word lane window (words 15..31) instead of the draft `16+4k` linear layout | The draft layout leaves 4 words per comparator — fits PROBE_W ≤ 32 only. A linear map for 4 comparators × 4 fields × 16 lanes needs 256 words and overflows the 8-bit word-address space next to the other registers. The issue text endorses the selector-window resolution; config writes are rare so the extra CMP_SEL write costs nothing. |
+| #5 | `BUF_DATA` returns 32-bit lanes (lane-then-address order), not "one buffer word" per pop | Buffer words are up to 512 bits; the CSR bus is 32. `DEPTH×L` pops drain the buffer; the host reassembles words from L consecutive lanes. |
 
 ## Milestone notes
+
+### M2 (issue #5)
+
+- INTERFACES.md is **v1 FROZEN**: CSR bus (combinational `csr_rdata`, zero wait states),
+  full CSR map with exact HWCFG/STATUS packings, CMP_SEL lane-window comparator addressing,
+  BUF_DATA lane-sequenced pop, TS_LO shadow latch, cfg_err/force_trig/soft_rst behavior,
+  and the frame envelope (opcodes, all multi-byte fields big-endian).
+- `scope_csr` holds all trigger-engine configuration (4 comparators × 4 fields ×
+  ⌈PROBE_W/32⌉ lanes, TRIG_COMBINE, SEQ_CNT0..3) and exports it flat-packed for
+  `scope_trigger` (issue #6): comparator k at `[k*PROBE_W +: PROBE_W]`, stage n at
+  `[n*32 +: 32]`.
+- force_trig is a *pending* latch in `scope_csr` held into the core's `trig` input until
+  accepted — this is what makes CTRL.force_trig robust across `sample_valid` gaps and the
+  FILLING→ARMED boundary.
 
 ### M0 (issues #2, #3)
 

@@ -50,22 +50,35 @@ package scope_pkg;
   localparam logic [7:0] SCOPE_OP_NAK       = 8'h15;  // ASCII NAK; response to bad CRC/cmd
 
   // ------------------------------------------------------------------------------------
-  // CSR word offsets (byte offset = index * 4) — draft map from INTERFACES.md v0.
+  // CSR word offsets (byte offset = index * 4). These match docs/INTERFACES.md
+  // "CSR map — v1 FROZEN" exactly, one for one — that section is the normative source;
+  // do not change either without a documented interface-revision note there.
   // ------------------------------------------------------------------------------------
-  localparam int unsigned CSR_ID           = 0;
-  localparam int unsigned CSR_HWCFG        = 1;
-  localparam int unsigned CSR_CTRL         = 2;
-  localparam int unsigned CSR_STATUS       = 3;
-  localparam int unsigned CSR_PRETRIG      = 4;
-  localparam int unsigned CSR_WINDOWS      = 5;
-  localparam int unsigned CSR_RLE_CTRL     = 6;
-  localparam int unsigned CSR_TS_LO        = 7;
-  localparam int unsigned CSR_TS_HI        = 8;
-  localparam int unsigned CSR_CMP_BASE     = 16;  // + 4*k for comparator k (see INTERFACES.md)
-  localparam int unsigned CSR_TRIG_COMBINE = 64;
-  localparam int unsigned CSR_SEQ_CNT_BASE = 65;  // 65..68 = SEQ_CNT0..3
-  localparam int unsigned CSR_BUF_CTRL     = 96;
-  localparam int unsigned CSR_BUF_DATA     = 97;
+  localparam int unsigned CSR_ID             = 0;
+  localparam int unsigned CSR_HWCFG          = 1;
+  localparam int unsigned CSR_CTRL           = 2;   // W strobes: 0 arm, 1 disarm, 2 force_trig, 3 soft_rst
+  localparam int unsigned CSR_STATUS         = 3;
+  localparam int unsigned CSR_PRETRIG        = 4;
+  localparam int unsigned CSR_WINDOWS        = 5;
+  localparam int unsigned CSR_RLE_CTRL       = 6;
+  localparam int unsigned CSR_TS_LO          = 7;   // read latches TS_HI shadow
+  localparam int unsigned CSR_TS_HI          = 8;
+  localparam int unsigned CSR_TRIG_INDEX     = 9;
+  localparam int unsigned CSR_TSTRIG_LO      = 10;
+  localparam int unsigned CSR_TSTRIG_HI      = 11;
+  localparam int unsigned CSR_CMP_SEL        = 15;  // [1:0] comparator k, [3:2] field
+  localparam int unsigned CSR_CMP_LANE_BASE  = 16;  // 16..31: lane window of selected field
+  localparam int unsigned CSR_CMP_LANE_WORDS = 16;
+  localparam int unsigned CSR_TRIG_COMBINE   = 64;
+  localparam int unsigned CSR_SEQ_CNT_BASE   = 65;  // 65..68 = SEQ_CNT0..3
+  localparam int unsigned CSR_BUF_CTRL       = 96;
+  localparam int unsigned CSR_BUF_DATA       = 97;
+
+  // CMP_SEL field encoding ([3:2])
+  localparam logic [1:0] CMP_FIELD_MASK      = 2'd0;
+  localparam logic [1:0] CMP_FIELD_VALUE     = 2'd1;
+  localparam logic [1:0] CMP_FIELD_EDGE_MASK = 2'd2;
+  localparam logic [1:0] CMP_FIELD_EDGE_POL  = 2'd3;
   /* verilator lint_on UNUSEDPARAM */
 
 endpackage
