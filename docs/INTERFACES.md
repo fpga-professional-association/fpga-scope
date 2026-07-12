@@ -325,3 +325,51 @@ BUF_CTRL/BUF_DATA/WIN_SEL/WIN_META form the drain path.
 appears in `WIN_META` (word 13, RO; read ≥ 1 cycle after writing WIN_SEL). Added so
 CSR-only hosts and the drain engine can reach the per-window sideband table; both words
 were reserved-as-0 before.
+
+### #11 CSR bus front-ends — Avalon-MM and AXI4-Lite (v1)
+
+Thin protocol adapters over the native CSR bus (word-addressed, combinational `csr_rdata`,
+single-cycle `csr_write`/`csr_read` strobes). Zero scope logic; the register semantics,
+RO-write handling, cfg_err lockout, and the BUF_DATA pop-on-read side effect all live in
+`scope_csr`. Instantiate one in front of `scope_top`'s `ext_csr_*` port (XPORT="CSR"), or in
+front of `scope_csr` directly.
+
+**Clock-domain contract:** both front-ends run in `scope_csr`'s clock domain — `clk`, the
+capture/probe domain — because that is where the register file and its BUF_DATA read pointer
+live. For an `XPORT="CSR"` instantiation the host-side clock crossing (from the SoC fabric's
+CSR clock to `clk`) is the integrating design's responsibility; the scope exposes a
+same-domain synchronous CSR slave and no more. (The byte-stream transports keep their own
+single CDC via the drain FIFOs, §8; the CSR front-ends add none.)
+
+**`scope_avalon`** — Avalon-MM slave, 32-bit, **word-addressed** (`address` = CSR word index,
+register k at host byte `4*k`). Combinational, zero-wait-state: `waitrequest` tied low,
+`readdata` = `csr_rdata`. A master asserts `read`/`write` for one cycle ⇒ one native strobe ⇒
+exactly one BUF_DATA pop per read.
+
+| Port | Dir | Width | Notes |
+|---|---|---|---|
+| `address` | in | 8 | CSR word index |
+| `read` | in | 1 | 1-cycle strobe |
+| `readdata` | out | 32 | combinational (= `csr_rdata`) |
+| `write` | in | 1 | 1-cycle strobe |
+| `writedata` | in | 32 | |
+| `waitrequest` | out | 1 | tied 0 |
+
+**`scope_axil`** — AXI4-Lite slave, 32-bit. Byte address, low 2 bits ignored, `AWADDR[9:2]` /
+`ARADDR[9:2]` = CSR word. One transaction at a time via a 3-state FSM (IDLE→WRESP / RRESP);
+AW/W accepted jointly (any arrival order), so a single `csr_write` strobe fires on the accept
+cycle; on an AR handshake a single `csr_read` strobe fires and the combinational `csr_rdata`
+is latched (so the BUF_DATA read pointer may advance underneath) before RVALID. `BRESP`/`RRESP`
+always `OKAY` — writes to read-only registers are silently ignored inside `scope_csr` (no
+SLVERR in v1); config writes while capturing set the sticky cfg_err bit. Write has priority
+over read when both are offered in IDLE.
+
+Channels: standard AW `{awaddr[9:0], awvalid, awready}`, W `{wdata[31:0], wstrb[3:0] (accepted,
+not enforced — no RMW in v1), wvalid, wready}`, B `{bresp[1:0], bvalid, bready}`, AR
+`{araddr[9:0], arvalid, arready}`, R `{rdata[31:0], rresp[1:0], rvalid, rready}`.
+
+Both adapters re-prove the full `scope_csr` register matrix in `sim/tb_csr_if.sv` (native path
+in `tb_csr`): RO-write rejection, R/W walk over every register class (PRETRIG/WINDOWS/RLE_CTRL/
+TRIG_COMBINE/SEQ_CNT/comparator lane window), CTRL strobe self-clear, cfg_err lockout, and the
+BUF_DATA pop-on-read sequence; the AXI-Lite leg additionally exercises AW-before-W, W-before-AW,
+simultaneous, and back-to-back reads.

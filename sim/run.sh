@@ -94,7 +94,9 @@ COMMON_SRCS=(
   "$RTL/scope_drain.sv"
   "$RTL/xport/scope_uart.sv"
   "$RTL/scope_top.sv"
-  # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
+  # -- CSR bus front-ends (issue #11):
+  "$RTL/if/scope_avalon.sv"
+  "$RTL/if/scope_axil.sv"
   # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
 
@@ -149,6 +151,7 @@ run_one tb_pretrig.sv         tb_pretrig          # issue #7: PRETRIG sweep + ho
 run_one tb_windows.sv         tb_windows          # issue #7: window slicing, metadata, disarm, cfg_err bound
 run_one tb_drain_cdc.sv       tb_drain_cdc        # issue #8: scope_top over byte stream, xclk!=clk, NAK/resync
 run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LSB-first + BE-CRC asserts first
+run_one tb_csr_if.sv          tb_csr_if           # issue #11: CSR matrix + BUF_DATA pop via Avalon-MM & AXI-Lite
 
 # scope_top elaboration matrix (issue #8): PROBE_W {8, 512} x XPORT {UART, STREAM} beyond
 # the fully-tested TB configs — lint-only builds, same -Wall flags.
