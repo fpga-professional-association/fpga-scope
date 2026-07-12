@@ -72,6 +72,9 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 | #5 | CSR map v1 adds `TRIG_INDEX` (9), `TSTRIG_LO` (10), `TSTRIG_HI` (11) — not in the PLAN.md draft map | A CSR-transport-only host (Avalon/AXI-Lite, issue #11) drains via `BUF_DATA` and never sees the DRAIN frame header, so without these registers it cannot reorder the circular buffer or timestamp the trigger. Freezing a map that makes the CSR transport unusable would be a spec bug. |
 | #5 | Wide comparator config uses a `CMP_SEL` + 16-word lane window (words 15..31) instead of the draft `16+4k` linear layout | The draft layout leaves 4 words per comparator — fits PROBE_W ≤ 32 only. A linear map for 4 comparators × 4 fields × 16 lanes needs 256 words and overflows the 8-bit word-address space next to the other registers. The issue text endorses the selector-window resolution; config writes are rare so the extra CMP_SEL write costs nothing. |
 | #5 | `BUF_DATA` returns 32-bit lanes (lane-then-address order), not "one buffer word" per pop | Buffer words are up to 512 bits; the CSR bus is 32. `DEPTH×L` pops drain the buffer; the host reassembles words from L consecutive lanes. |
+| #6 | Probe→trig latency is **2 cycles** (not the design doc's "1-cycle") | The issue mandates registered probe history, comparator outputs, AND sequencer: that is two register stages before the fire pulse. The constant is measured and asserted in `tb_trigger_seq` and — critically — `scope_trigger.sample_o` delays the capture-data path by the same 2 cycles, so the host-visible trigger sample is exactly the satisfying sample. `ts_at_trig` = satisfying-sample time + 2 (documented in INTERFACES.md). |
+| #6 | `trig_ext_o` excludes `trig_ext_i` and pulses only on the instance's own fire (sequencer fire or force_trig rising edge) | Including ext_i would create a combinational loop when two instances are cross-connected (`A.ext_o→B.ext_i, B.ext_o→A.ext_i`). Asserted in `tb_trigger_seq`. |
+| #6 | Formal checker is instantiated inside `scope_core` under `` `ifdef FORMAL `` instead of SVA `bind` | yosys 0.33 (the local baseline) has no usable `bind`/`import` support. The properties still live in their own module/file (`formal/scope_core_fchk.sv`); synthesis and Verilator never see them. `scope_core` uses fully qualified `scope_pkg::` references (no header import) for the same yosys-compatibility reason. |
 
 ## Milestone notes
 
@@ -88,6 +91,24 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 - force_trig is a *pending* latch in `scope_csr` held into the core's `trig` input until
   accepted — this is what makes CTRL.force_trig robust across `sample_valid` gaps and the
   FILLING→ARMED boundary.
+
+### M3 (issue #6)
+
+- `scope_trigger`: 4 comparators (level+edge per INTERFACES.md "Trigger semantics") +
+  4-stage sequencer with occurrence counters and disabled-stage skipping. Fully registered;
+  **probe→trig latency = 2 cycles**, compensated by the module's own 2-cycle `sample_o`
+  delay path so `buffer[TRIG_INDEX]` is the satisfying sample (asserted end-to-end in
+  `tb_trigger_seq` against `scope_ref.py`'s `trigger_model`).
+- `run` input gates the sequencer (`scope_top` wires it to `state==ARMED`); one fire per
+  run assertion; parked at the first enabled stage while low.
+- Formal (SBY, smtbmc/z3): `formal/scope_core.sby` proves properties (a) trigger sample
+  never lost (1-sample shadow + no-overwrite-in-window, with inductive distance invariants)
+  and (b) write pointer frozen in DONE/IDLE — **both BMC (depth 60) and full k-induction
+  (depth 25) pass** at PROBE_W=4/DEPTH_LOG2=3. CI runs them via the OSS CAD Suite.
+- Tool notes: yosys 0.33 requires fully-qualified package refs (no `import`) — applied to
+  `scope_core`. Verilator 5.020 does not propagate procedural part-select writes to
+  >64-bit signals into continuous assigns (minimal repro during #6); TBs assign wide config
+  vectors whole.
 
 ### M0 (issues #2, #3)
 

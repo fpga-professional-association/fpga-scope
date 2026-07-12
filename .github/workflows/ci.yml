@@ -25,3 +25,18 @@ jobs:
 
       - name: Run testbenches
         run: bash sim/run.sh
+
+  # SymbiYosys formal proofs (issue #6+): BMC + k-induction with the OSS CAD Suite
+  # (ubuntu's apt has yosys but no sby package). sby resolves [files] relative to the
+  # invocation directory, so run from formal/.
+  formal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install OSS CAD Suite (yosys + sby + solvers)
+        uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - name: Prove scope_core properties (a) and (b)
+        run: cd formal && sby -f scope_core.sby

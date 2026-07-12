@@ -30,6 +30,11 @@ gen_vectors() {
   python3 "$SIM/model/scope_ref.py" capture --probe-w 512 --depth-log2 10 --pretrig 0 \
     --trig-sample 512 --count 2560 --seed 0xC0FFEE02 \
     --out-prefix "$BUILD/vectors/cap_w512_d10" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  # tb_trigger_cmp / tb_trigger_seq case suites (issue #6)
+  python3 "$SIM/model/scope_ref.py" trigger-suite --suite cmp --probe-w 16 \
+    --out-prefix "$BUILD/vectors/trig_cmp" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" trigger-suite --suite seq --probe-w 16 \
+    --out-prefix "$BUILD/vectors/trig_seq" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
 }
 
 # Source order: package first (scope_pkg, issue #4), then rtl/prim primitives (issue #3),
@@ -46,6 +51,7 @@ COMMON_SRCS=(
   # -- core RTL (issues #4..#9): scope_core, then scope_csr, scope_trigger, scope_rle, scope_drain, scope_top
   "$RTL/scope_core.sv"
   "$RTL/scope_csr.sv"
+  "$RTL/scope_trigger.sv"
   # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
   # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
@@ -95,6 +101,8 @@ run_one tb_prim_fifo_sync.sv  tb_prim_fifo_sync   # issue #3: sync FIFO fill/dra
 run_one tb_prim_fifo_async.sv tb_prim_fifo_async  # issue #3: async FIFO 3:1 / 1:3 / ~1:1 CDC soak, >=100k/leg
 run_one tb_capture_basic.sv   tb_capture_basic    # issue #4: scope_core capture bit-exact vs scope_ref.py
 run_one tb_csr.sv             tb_csr              # issue #5: CSR matrix, cfg_err lockout, BUF_DATA drain
+run_one tb_trigger_cmp.sv     tb_trigger_cmp      # issue #6: comparator truth table, cycle-exact vs model
+run_one tb_trigger_seq.sv     tb_trigger_seq      # issue #6: sequencer configs, latency + alignment asserts
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then

@@ -206,6 +206,48 @@ Behavioral rules (frozen):
 
 ---
 
+## Trigger semantics — v1 (issue #6; behavior addendum, register offsets unchanged)
+
+**Comparator unit k** (all four units identical, evaluated every probe-domain cycle):
+
+```
+level_hit_k = ((probe & CMPk_MASK) == CMPk_VALUE)
+edge_hit_k  = (CMPk_EDGE_MASK == 0) ? 1
+            : |(CMPk_EDGE_MASK & ((CMPk_EDGE_POL &  rise)      // pol bit 1: rising
+                                | (~CMPk_EDGE_POL & fall)))    // pol bit 0: falling
+              where rise = ~probe_d1 & probe, fall = probe_d1 & ~probe
+cmp_hit_k   = level_hit_k && edge_hit_k
+```
+
+For each bit b with `EDGE_MASK[b]=1`, a hit requires a transition on `probe[b]` this cycle
+whose direction matches `EDGE_POL[b]` (1 = rising, 0 = falling); multiple selected edge bits
+OR together. `EDGE_MASK=0` disables the edge term (level-only). `MASK=0, VALUE=0` makes the
+level term always-hit (edge-only or always-hit units).
+
+**Combine + sequencer:** stage n is enabled iff `TRIG_COMBINE[8n+3:8n] != 0`; disabled
+stages are skipped (1/2/3-stage configurations). `TRIG_COMBINE[8n+4]` selects AND (1) / OR
+(0) reduction over the selected comparators' `cmp_hit`. A stage advances after `SEQ_CNTn`
+occurrences (cycles where its reduction is true, not necessarily consecutive; 0 ≡ 1). A
+stage completing on sample i hands over starting at sample i+1. Completion of the last
+enabled stage fires the trigger; one fire per arm. With all stages disabled the comparator
+path never fires — force_trig and trig_ext_i still work.
+
+**Latency and trigger-sample alignment (load-bearing):** the trigger pipeline is fully
+registered (probe history, comparator outputs, sequencer, fire pulse): the fire pulse is
+consumed by the capture core exactly **LATENCY = 2** cycles after the probe sample that
+satisfied the final stage. The sample path into the capture buffer is delayed by the same 2
+cycles (`scope_trigger.sample_o`), so **`buffer[TRIG_INDEX]` IS the probe sample that
+satisfied the final stage** — this is the host-visible trigger-sample definition.
+`TSTRIG` (ts_at_trig) is latched at trigger consumption: it equals the satisfying sample's
+probe-domain time + LATENCY (constant, documented; hosts may subtract it).
+
+**External trigger:** `trig_ext_i` (synchronous to `clk`) ORs into the trigger.
+`trig_ext_o` pulses for 1 cycle on this instance's OWN fire (sequencer fire, or the rising
+edge of force_trig); it deliberately excludes `trig_ext_i`, so cross-connecting two
+instances cannot form a combinational loop.
+
+---
+
 ## Drain frame format — v1 FROZEN (byte stream, both transports)
 
 ```

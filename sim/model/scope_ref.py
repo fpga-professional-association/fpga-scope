@@ -117,6 +117,196 @@ def write_mem(path, values, hex_digits):
             f.write(f"{v:0{hex_digits}x}\n")
 
 
+# ---------------------------------------------------------------------------------------
+# Trigger model (issue #6) — cycle-exact vs rtl/scope_trigger.sv.
+# ---------------------------------------------------------------------------------------
+
+def trigger_model(stim, probe_w, cmp_cfg, combine, seq_cnt, prev0=0):
+    """Replays rtl/scope_trigger.sv in SAMPLE terms (the RTL's registered pipeline shifts
+    everything by a constant LATENCY=2 cycles; alignment is restored by its delayed
+    sample_o path, so sample indices are the shared currency).
+
+    cmp_cfg: list of 4 (mask, value, edge_mask, edge_pol) tuples.
+    combine: TRIG_COMBINE word — stage n at bits [8n+7:8n]: [3:0] select, [4] AND mode.
+    seq_cnt: list of 4 occurrence targets (0 treated as 1).
+    prev0:   probe value in the cycle before stim[0] (TBs idle the probe at 0).
+
+    Returns (per-sample cmp_hit nibbles, fire sample index or None). The fire index is the
+    sample that satisfied the final enabled stage — the host-visible trigger sample.
+    """
+    wmask = (1 << probe_w) - 1
+    sel = [(combine >> (8 * n)) & 0xF for n in range(4)]
+    andm = [(combine >> (8 * n + 4)) & 0x1 for n in range(4)]
+    en = [s != 0 for s in sel]
+    tgt = [max(1, c) for c in seq_cnt]
+
+    def next_en(frm):
+        for i in range(frm, 4):
+            if en[i]:
+                return i
+        return None
+
+    cur = next_en(0)
+    occ = 0
+    fired = None
+    prev = prev0 & wmask
+    hits_list = []
+
+    for i, s in enumerate(stim):
+        s &= wmask
+        hits = 0
+        rise = ~prev & s & wmask
+        fall = prev & ~s & wmask
+        for k, (m, v, em, ep) in enumerate(cmp_cfg):
+            level = (s & m) == v
+            edge = True if em == 0 else (em & ((ep & rise) | (~ep & wmask & fall))) != 0
+            if level and edge:
+                hits |= 1 << k
+        hits_list.append(hits)
+
+        if cur is not None and fired is None:
+            sh = (hits & sel[cur]) == sel[cur] if andm[cur] else (hits & sel[cur]) != 0
+            if sh:
+                if occ + 1 >= tgt[cur]:
+                    nxt = next_en(cur + 1)
+                    if nxt is None:
+                        fired = i
+                    else:
+                        cur, occ = nxt, 0
+                else:
+                    occ += 1
+        prev = s
+    return hits_list, fired
+
+
+def _biased_stim(seed, count, probe_w, value, mask, edge_bits):
+    """Probe stream with decent hit density: mix of pure xorshift randomness, forced
+    level matches (value | rand-outside-mask), and edge-bit toggles both directions."""
+    wmask = (1 << probe_w) - 1
+    stim = []
+    x = seed & MASK32
+    cur = 0
+    for i in range(count):
+        x = xorshift32(x + i)
+        r = 0
+        for c in range((probe_w + 31) // 32):
+            x = xorshift32(x ^ (c * 0x9E3779B9 & MASK32))
+            r |= x << (32 * c)
+        r &= wmask
+        m = x % 10
+        if m < 4:
+            cur = r  # pure random
+        elif m < 7:
+            cur = (value | (r & ~mask)) & wmask  # forced level match
+        else:
+            cur = cur ^ (edge_bits & r if (x >> 8) & 1 else edge_bits)  # edge toggles
+        stim.append(cur)
+    return stim
+
+
+def _trigger_cases(suite, probe_w):
+    """Handcrafted + biased-random case list. Each case: dict with cmp_cfg (4 tuples),
+    combine, seq_cnt, stim."""
+    w = probe_w
+    wmask = (1 << w) - 1
+    b = lambda i: 1 << (i % w)
+    cases = []
+    if suite == "cmp":
+        spc = 400
+        # combine=0: no stage enabled — cmp TB checks per-cycle hits only, trig must not fire
+        base = dict(combine=0x00000000, seq_cnt=[1, 1, 1, 1])
+        # 1: level-only on all 4 units (distinct masks/values)
+        cases.append(dict(base, cmp_cfg=[
+            (0xFF & wmask, 0xA5 & wmask, 0, 0),
+            (0xF0 & wmask, 0x50 & wmask, 0, 0),
+            ((0xFF00 if w >= 16 else 0xF) & wmask, (0x1200 if w >= 16 else 0x5) & wmask, 0, 0),
+            (wmask, 0x1234 & wmask, 0, 0)],
+            stim=_biased_stim(0x11, spc, w, 0xA5 & wmask, 0xFF & wmask, b(0))))
+        # 2: edge-only rising / falling / both / multi-bit
+        cases.append(dict(base, cmp_cfg=[
+            (0, 0, b(0), b(0)),          # rising bit 0
+            (0, 0, b(0), 0),             # falling bit 0
+            (0, 0, b(3) | b(7), b(3)),   # rise b3 OR fall b7
+            (0, 0, (b(1) | b(2) | b(5)), (b(1) | b(2) | b(5)))],
+            stim=_biased_stim(0x22, spc, w, 0, 0, b(0) | b(3) | b(7) | b(1) | b(2) | b(5))))
+        # 3: level+edge combined
+        cases.append(dict(base, cmp_cfg=[
+            (0xF0 & wmask, 0xA0 & wmask, b(0), b(0)),
+            (0x0F & wmask, 0x05 & wmask, b(4), 0),
+            (0xFF & wmask, 0x5A & wmask, b(7) | b(6), b(7)),
+            (0x03 & wmask, 0x02 & wmask, b(1), b(1))],
+            stim=_biased_stim(0x33, spc, w, 0xA0 & wmask, 0xF0 & wmask, b(0) | b(4) | b(7) | b(6) | b(1))))
+        # 4: all-zero mask (always-hit level), always-hit unit, alternating X-adjacent stim
+        cases.append(dict(base, cmp_cfg=[
+            (0, 0, 0, 0),                 # always hits every cycle
+            (0, 0, wmask, wmask),         # any rising edge anywhere
+            (0, 0, wmask, 0),             # any falling edge anywhere
+            (wmask, 0x5555 & wmask, 0, 0)],
+            stim=[(0x5555 & wmask) if i % 2 == 0 else (0xAAAA & wmask) for i in range(spc)]))
+        # 5-6: biased-random configs
+        for s in (0x55, 0x66):
+            x = xorshift32(s)
+            cfg = []
+            for k in range(4):
+                x = xorshift32(x + k)
+                m = x & wmask
+                x = xorshift32(x)
+                v = x & m
+                x = xorshift32(x)
+                em = x & wmask if (x & 3) == 0 else (x & 0xF & wmask)
+                x = xorshift32(x)
+                ep = x & em
+                cfg.append((m, v, em, ep))
+            cases.append(dict(base, cmp_cfg=cfg,
+                              stim=_biased_stim(s, spc, w, cfg[0][1], cfg[0][0], cfg[1][2] | 1)))
+    else:  # seq
+        spc = 3000
+        # common comparators: 0 = easy level hit, 1 = edge, 2 = harder level, 3 = impossible
+        cmp_cfg = [
+            (0x3 & wmask, 0x1 & wmask, 0, 0),   # ~1/4 of samples
+            (0, 0, b(0), b(0)),                 # rising bit0
+            (0x7 & wmask, 0x5 & wmask, 0, 0),   # ~1/8
+            (0, 1 & wmask, 0, 0),               # (probe & 0)==1: never
+        ]
+        stim0 = _biased_stim(0x77, spc, w, 0x1, 0x3, b(0))
+        mk = lambda combine, seq_cnt, stim=None: dict(
+            cmp_cfg=cmp_cfg, combine=combine, seq_cnt=seq_cnt, stim=stim or stim0)
+        cases.append(mk(0x00000001, [1, 1, 1, 1]))              # 1-stage OR cmp0, first hit
+        cases.append(mk(0x00000001, [5, 1, 1, 1]))              # 1-stage, 5 occurrences
+        cases.append(mk(0x00000301, [2, 1, 1, 1]))              # 2-stage: cmp0 x2 then cmp0|cmp1
+        cases.append(mk(0x00130201, [1, 2, 5, 1]))              # 3-stage: cmp0, cmp1 x2, AND(cmp0&cmp1) x5
+        cases.append(mk(0x04020104 | (1 << 28), [2, 1, 255, 1],
+                        _biased_stim(0x88, spc, w, 0x1, 0x3, b(0))))  # 4-stage with 255 occurrences
+        cases.append(mk(0x00010004, [1, 1, 1, 1]))              # disabled stages skipped (0 and 2 en... see note)
+        cases.append(mk(0x00000008, [1, 1, 1, 1]))              # never fires: cmp3 impossible
+    return cases
+
+
+def cmd_trigger_suite(args):
+    cases = _trigger_cases(args.suite, args.probe_w)
+    digits = (args.probe_w + 3) // 4
+    stim_all, hits_all, cfg_all, meta = [], [], [], []
+    spc = max(len(c["stim"]) for c in cases)
+    for c in cases:
+        stim = c["stim"] + [0] * (spc - len(c["stim"]))
+        hits, fire = trigger_model(stim, args.probe_w, c["cmp_cfg"], c["combine"],
+                                   c["seq_cnt"], prev0=0)
+        if args.suite == "seq" and fire is None and c["combine"] != 0x00000008:
+            raise SystemExit(f"scope_ref: seq case did not fire (combine={c['combine']:#x})")
+        stim_all += stim
+        hits_all += hits
+        for k in range(4):
+            cfg_all += list(c["cmp_cfg"][k])
+        cfg_all += [c["combine"]] + list(c["seq_cnt"])
+        meta.append(0xFFFF_FFFF_FFFF_FFFF if fire is None else fire)
+    write_mem(f"{args.out_prefix}_stim.mem", stim_all, digits)
+    write_mem(f"{args.out_prefix}_hits.mem", hits_all, 1)
+    write_mem(f"{args.out_prefix}_cfg.mem", cfg_all, 16)  # 21 x 64-bit lines per case
+    # meta: line 0 = case count, line 1 = samples per case, then one fire index per case
+    write_mem(f"{args.out_prefix}_meta.mem", [len(cases), spc] + meta, 16)
+    print(f"scope_ref: {args.out_prefix}: {len(cases)} {args.suite} cases x {spc} samples")
+
+
 def cmd_capture(args):
     if args.stim_in:
         with open(args.stim_in) as f:
@@ -152,6 +342,13 @@ def main(argv):
                    help="read stimulus from file (one hex vector per line) instead of generating")
     c.add_argument("--out-prefix", required=True)
     c.set_defaults(func=cmd_capture)
+
+    t = sub.add_parser("trigger-suite",
+                       help="comparator/sequencer case suites for tb_trigger_cmp/seq")
+    t.add_argument("--suite", choices=["cmp", "seq"], required=True)
+    t.add_argument("--probe-w", type=int, required=True)
+    t.add_argument("--out-prefix", required=True)
+    t.set_defaults(func=cmd_trigger_suite)
 
     args = p.parse_args(argv)
     args.func(args)
