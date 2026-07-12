@@ -55,6 +55,9 @@ module tb_capture_leg
   logic [PROBE_W-1:0]    rd_data;
   logic [TS_W-1:0]       ts;
   logic [TS_W-1:0]       ts_at_trig;
+  logic [7:0]            win_rd_addr = 8'h0;
+  logic [DEPTH_LOG2:0]   win_rd_data;
+  wire unused_win_meta = &{1'b0, win_rd_data};
 
   scope_core #(
       .PROBE_W   (PROBE_W),

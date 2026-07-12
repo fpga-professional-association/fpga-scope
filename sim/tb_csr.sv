@@ -138,9 +138,13 @@ module tb_csr_leg
       .armed       (armed),
       .rd_addr     (buf_rd_addr),
       .rd_data     (buf_rd_data),
+      .win_rd_addr (8'h0),
+      .win_rd_data (unused_win_meta),
       .ts          (ts),
       .ts_at_trig  (ts_at_trig)
   );
+
+  logic [DEPTH_LOG2:0] unused_win_meta;
 
   // ---- golden vectors ----------------------------------------------------------------------
   logic [PROBE_W-1:0] stim[N_STIM];
@@ -260,8 +264,8 @@ module tb_csr_leg
     csr_expect(8'(CSR_PRETRIG), 32'd17, "PRETRIG");
     csr_wr(8'(CSR_WINDOWS), 32'h0);
     csr_expect(8'(CSR_WINDOWS), 32'd1, "WINDOWS 0 clamps to 1");
-    csr_wr(8'(CSR_WINDOWS), 32'hAB);
-    csr_expect(8'(CSR_WINDOWS), 32'hAB, "WINDOWS");
+    csr_wr(8'(CSR_WINDOWS), 32'h7B);  // 123 <= DEPTH/2 for both legs (#7 range check)
+    csr_expect(8'(CSR_WINDOWS), 32'h7B, "WINDOWS");
     csr_wr(8'(CSR_RLE_CTRL), 32'h3);
     csr_expect(8'(CSR_RLE_CTRL), 32'h1, "RLE_CTRL bit0 only");
     if (rle_enable !== 1'b1) fail("rle_enable output");

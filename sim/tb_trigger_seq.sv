@@ -94,9 +94,13 @@ module tb_trigger_seq
       .armed       (armed),
       .rd_addr     (rd_addr),
       .rd_data     (rd_data),
+      .win_rd_addr (8'h0),
+      .win_rd_data (unused_win_meta),
       .ts          (ts),
       .ts_at_trig  (ts_at_trig)
   );
+
+  logic [DEPTH_LOG2:0] unused_win_meta;
 
   logic [PROBE_W-1:0] stim[MAXC*MAXS];
   logic [3:0] hits[MAXC*MAXS];

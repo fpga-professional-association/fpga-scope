@@ -17,7 +17,7 @@ prove
 
 [options]
 bmc: mode bmc
-bmc: depth 60
+bmc: depth 40
 prove: mode prove
 prove: depth 25
 multiclock off

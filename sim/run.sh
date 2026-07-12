@@ -35,6 +35,37 @@ gen_vectors() {
     --out-prefix "$BUILD/vectors/trig_cmp" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
   python3 "$SIM/model/scope_ref.py" trigger-suite --suite seq --probe-w 16 \
     --out-prefix "$BUILD/vectors/trig_seq" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  # tb_pretrig sweep (issue #7) — the pretrig/trig-sample table here MUST match the
+  # PT[]/KS[] localparams in sim/tb_pretrig.sv
+  local d depth i
+  for d in 8 10; do
+    depth=$((1 << d))
+    local ps=(0 1 $((depth / 4)) $((depth / 2)) $((depth - 1)))
+    local ks=(3 $((2 * depth + 341)) $((depth / 4)) $((2 * depth + 123)) $((2 * depth + 55)))
+    for i in 0 1 2 3 4; do
+      python3 "$SIM/model/scope_ref.py" capture --probe-w 32 --depth-log2 "$d" \
+        --pretrig "${ps[$i]}" --trig-sample "${ks[$i]}" --count $((${ks[$i]} + depth + 8)) \
+        --seed $((0xBEEF0000 + d * 16 + i)) \
+        --out-prefix "$BUILD/vectors/pt_d${d}_p${ps[$i]}" \
+        || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+    done
+  done
+  # tb_windows (issue #7): per-window trigger schedules incl. rel=0 (first ARMED sample)
+  python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
+    --windows 1 --trig-rel 300 --count 4000 --out-prefix "$BUILD/vectors/win_w1" \
+    || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
+    --windows 2 --trig-rel 5,200 --count 4000 --out-prefix "$BUILD/vectors/win_w2" \
+    || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
+    --windows 3 --trig-rel 0,90,33 --count 4000 --out-prefix "$BUILD/vectors/win_w3" \
+    || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
+    --windows 5 --trig-rel 40,0,77,150,3 --count 4000 --out-prefix "$BUILD/vectors/win_w5" \
+    || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
+    --windows 8 --trig-rel 9,60,2,130,0,45,20,71 --count 4000 \
+    --out-prefix "$BUILD/vectors/win_w8" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
 }
 
 # Source order: package first (scope_pkg, issue #4), then rtl/prim primitives (issue #3),
@@ -103,6 +134,8 @@ run_one tb_capture_basic.sv   tb_capture_basic    # issue #4: scope_core capture
 run_one tb_csr.sv             tb_csr              # issue #5: CSR matrix, cfg_err lockout, BUF_DATA drain
 run_one tb_trigger_cmp.sv     tb_trigger_cmp      # issue #6: comparator truth table, cycle-exact vs model
 run_one tb_trigger_seq.sv     tb_trigger_seq      # issue #6: sequencer configs, latency + alignment asserts
+run_one tb_pretrig.sv         tb_pretrig          # issue #7: PRETRIG sweep + host-math reconstruction
+run_one tb_windows.sv         tb_windows          # issue #7: window slicing, metadata, disarm, cfg_err bound
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then

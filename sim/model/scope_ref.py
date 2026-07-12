@@ -118,8 +118,98 @@ def write_mem(path, values, hex_digits):
 
 
 # ---------------------------------------------------------------------------------------
-# Trigger model (issue #6) — cycle-exact vs rtl/scope_trigger.sv.
+# Multi-window capture model (issue #7) — cycle-exact vs rtl/scope_core.sv.
 # ---------------------------------------------------------------------------------------
+
+def weff_log2_of(windows, depth_log2):
+    w = max(1, windows)
+    r = 0
+    while (1 << r) < w:
+        r += 1
+    return min(r, depth_log2 - 1)
+
+
+def windows_model(stim, depth_log2, pretrig, windows, trig_rel):
+    """Cycle-exact multi-window replay of scope_core. stim[k] is presented on cycle k with
+    sample_valid=1 (cycle 0 = the first cycle in FILLING after arm). Trigger scheduling:
+    trig_rel[w] = number of ARMED cycles window w waits before its trigger pulse (so the
+    trigger sample is the (trig_rel[w]+1)-th ARMED sample of that window); the chosen
+    ABSOLUTE trigger cycles are returned for the TB to drive.
+
+    Slicing semantics (INTERFACES.md "Capture semantics", DESIGN.md):
+      W_eff = 2^ceil(log2(windows)) clamped to DEPTH/2; SLICE = DEPTH / W_eff;
+      pretrig_eff = pretrig >> log2(W_eff); post budget = SLICE - pretrig_eff (trigger
+      sample = post #1); window w captures into slice w; one DONE cycle between windows.
+
+    Returns (buf, per_window list of dicts {trig_cycle, trig_index, wrapped}, cycles_used).
+    Unwritten buffer entries are None.
+    """
+    depth = 1 << depth_log2
+    weff = weff_log2_of(windows, depth_log2)
+    slice_mask = (depth - 1) >> weff
+    p_eff = pretrig >> weff
+
+    buf = [None] * depth
+    st = "FILLING"
+    base = 0
+    off = 0
+    fill = 0
+    post = 0
+    wrapped = False
+    win = 0
+    armed_seen = 0
+    trig_index = None
+    acc_cycle = None
+    meta = []
+
+    for k, s in enumerate(stim):
+        trig = (st == "ARMED") and (armed_seen == trig_rel[win])
+        wr = st in ("FILLING", "ARMED") or (st == "TRIGGERED" and post != 0)
+        acc = trig  # trig only generated in ARMED here
+        fill_wr = wr and st == "FILLING"
+        post_wr = wr and st == "TRIGGERED"
+
+        if st == "ARMED":
+            armed_seen += 1
+        if wr:
+            buf[base | off] = s
+            if off == slice_mask:
+                wrapped = True
+
+        fill_next = fill + (1 if fill_wr else 0)
+        post_next = post - (1 if post_wr else 0)
+
+        if acc:
+            trig_index = base | off
+            acc_cycle = k
+            post = slice_mask - p_eff
+        else:
+            post = post_next
+        if wr:
+            off = (off + 1) & slice_mask
+        fill = fill_next
+
+        if st == "FILLING" and fill_next >= p_eff:
+            st = "ARMED"
+        elif st == "ARMED" and acc:
+            st = "TRIGGERED"
+        elif st == "TRIGGERED" and post_next == 0 and not acc:
+            # window complete (state-update edge; the DONE state occupies cycle k+1)
+            meta.append(dict(trig_cycle=acc_cycle, trig_index=trig_index, wrapped=wrapped))
+            st = "DONE"
+        elif st == "DONE":
+            win += 1
+            if win < windows:
+                base = (base + slice_mask + 1) & (depth - 1)
+                off = 0
+                fill = 0
+                wrapped = False
+                armed_seen = 0
+                st = "FILLING"
+            else:
+                return buf, meta, k + 1
+
+    raise SystemExit("scope_ref.py: stimulus exhausted before all windows completed")
 
 def trigger_model(stim, probe_w, cmp_cfg, combine, seq_cnt, prev0=0):
     """Replays rtl/scope_trigger.sv in SAMPLE terms (the RTL's registered pipeline shifts
@@ -326,6 +416,23 @@ def cmd_capture(args):
           f"trig_index={trig_index}, wrapped={int(wrapped)}, consumed={consumed}")
 
 
+def cmd_windows(args):
+    trig_rel = [int(x, 0) for x in args.trig_rel.split(",")]
+    assert len(trig_rel) == args.windows, "--trig-rel needs one entry per window"
+    stim = gen_stimulus(args.seed, args.count, args.probe_w)
+    buf, meta, cycles = windows_model(stim, args.depth_log2, args.pretrig, args.windows,
+                                      trig_rel)
+    digits = (args.probe_w + 3) // 4
+    write_mem(f"{args.out_prefix}_stim.mem", stim, digits)
+    write_mem(f"{args.out_prefix}_buf.mem", [0 if v is None else v for v in buf], digits)
+    m = [args.windows, cycles]
+    for w in meta:
+        m += [w["trig_cycle"], w["trig_index"], int(w["wrapped"])]
+    write_mem(f"{args.out_prefix}_meta.mem", m, 16)
+    print(f"scope_ref: {args.out_prefix}: {args.windows} windows in {cycles} cycles, "
+          f"trig_cycles={[w['trig_cycle'] for w in meta]}")
+
+
 def main(argv):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -342,6 +449,18 @@ def main(argv):
                    help="read stimulus from file (one hex vector per line) instead of generating")
     c.add_argument("--out-prefix", required=True)
     c.set_defaults(func=cmd_capture)
+
+    w = sub.add_parser("windows", help="multi-window capture expectation for tb_windows")
+    w.add_argument("--probe-w", type=int, required=True)
+    w.add_argument("--depth-log2", type=int, required=True)
+    w.add_argument("--pretrig", type=int, default=0)
+    w.add_argument("--windows", type=int, required=True)
+    w.add_argument("--trig-rel", required=True,
+                   help="comma list: ARMED cycles each window waits before its trigger")
+    w.add_argument("--seed", type=lambda s: int(s, 0), default=0xC0FFEE07)
+    w.add_argument("--count", type=int, required=True)
+    w.add_argument("--out-prefix", required=True)
+    w.set_defaults(func=cmd_windows)
 
     t = sub.add_parser("trigger-suite",
                        help="comparator/sequencer case suites for tb_trigger_cmp/seq")

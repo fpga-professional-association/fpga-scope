@@ -206,6 +206,29 @@ Behavioral rules (frozen):
 
 ---
 
+## Capture semantics — v1 (issue #7; behavior addendum, register offsets unchanged)
+
+**Pre-trigger:** `FILLING` stores exactly `PRETRIG_EFF` samples after arm, then `ARMED`.
+Triggers are ignored in `FILLING` (including the FILLING→ARMED decision cycle). The
+trigger sample counts as post-trigger sample #1: `TRIGGERED` stores
+`SLICE − PRETRIG_EFF − 1` further samples, so a completed window holds exactly
+`PRETRIG_EFF` history + trigger + rest. Boundary values `PRETRIG=0` (pure post) and
+`PRETRIG=DEPTH−1` (1 post sample) are valid.
+
+**Windows (v1 slicing):** one arm yields `WINDOWS` (1..255) back-to-back captures.
+`W_eff = 2^ceil(log2(WINDOWS))`, clamped so a slice holds ≥ 2 samples — `scope_csr`
+rejects `WINDOWS > DEPTH/2` with `cfg_err`. The buffer is divided into `W_eff` equal
+slices of `SLICE = DEPTH / W_eff` samples; window w captures into slice w (base address
+`w·SLICE`); slices beyond `WINDOWS−1` are unused when `WINDOWS < W_eff`. Per-window
+scaling: `PRETRIG_EFF = PRETRIG >> log2(W_eff)` (proportional — the configured
+pretrig/post ratio is preserved per slice). Between windows the FSM passes through one
+`DONE` cycle and auto re-arms through `FILLING`; after the LAST window it parks in `DONE`
+until `arm`/`disarm` (see DESIGN.md deviation table). `STATUS.windows_done` counts live;
+`STATUS.triggered/wrapped` and `TRIG_INDEX`/`TSTRIG` reflect the most recent window.
+Per-window `{wrapped, trig_index}` is recorded in a sideband table (drained in the #8
+DRAIN header). `disarm` mid-sequence aborts to IDLE; `windows_done` shows completed
+windows. Host-side time reordering: DESIGN.md "Host-side reconstruction" (normative).
+
 ## Trigger semantics — v1 (issue #6; behavior addendum, register offsets unchanged)
 
 **Comparator unit k** (all four units identical, evaluated every probe-domain cycle):

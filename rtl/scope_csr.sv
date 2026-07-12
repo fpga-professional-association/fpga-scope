@@ -34,7 +34,8 @@
 //     satisfies this.
 //   * TS_LO read latches ts[47:32] into a shadow; TS_HI returns the shadow (coherent 48-bit
 //     reads with two 32-bit accesses).
-//   * WINDOWS writes of 0 are stored as 1 (range 1..255).
+//   * WINDOWS writes of 0 are stored as 1 (range 1..255); values > DEPTH/2 (which would
+//     make a window slice smaller than 2 samples) are rejected and set cfg_err (issue #7).
 //   * Reserved/unmapped addresses read 0; writes to them are ignored (no cfg_err).
 module scope_csr
   import scope_pkg::*;
@@ -105,6 +106,11 @@ module scope_csr
   wire cfg_locked = (state != 3'(SCOPE_ST_IDLE));
   wire cfg_wr_ok = csr_write && is_cfg_addr && !cfg_locked;
 
+  // WINDOWS range check (issue #7): a slice must hold >= 2 samples, i.e. WINDOWS <= DEPTH/2
+  // (after the 0 -> 1 clamp). Out-of-range values are rejected and set cfg_err.
+  wire [7:0] windows_wval = (csr_wdata[7:0] == 8'h0) ? 8'd1 : csr_wdata[7:0];
+  wire windows_bad = (32'(windows_wval) > (32'h1 << (DEPTH_LOG2 - 1)));
+
   // CTRL strobes to the core (combinational pulses, consumed at the same edge as the write)
   assign arm    = wr_ctrl && csr_wdata[0];
   assign disarm = wr_ctrl && (csr_wdata[1] || csr_wdata[3]);  // soft_rst also disarms
@@ -141,8 +147,7 @@ module scope_csr
       for (int unsigned n = 0; n < SEQ_STAGES; n++) seq_cnt_q[n] <= 32'd1;
     end else if (cfg_wr_ok) begin
       if (csr_addr == 8'(CSR_PRETRIG)) pretrig_q <= csr_wdata[DEPTH_LOG2-1:0];
-      if (csr_addr == 8'(CSR_WINDOWS)) windows_q <= (csr_wdata[7:0] == 8'h0) ? 8'd1
-                                                                             : csr_wdata[7:0];
+      if (csr_addr == 8'(CSR_WINDOWS) && !windows_bad) windows_q <= windows_wval;
       if (csr_addr == 8'(CSR_RLE_CTRL)) rle_enable_q <= csr_wdata[0];
       if (csr_addr == 8'(CSR_CMP_SEL)) cmp_sel_q <= csr_wdata[3:0];
       if (is_lane_addr && (32 * int'(lane_idx) < PROBE_W))
@@ -173,6 +178,7 @@ module scope_csr
     if (rst) cfg_err <= 1'b0;
     else if (soft_rst) cfg_err <= 1'b0;
     else if (csr_write && is_cfg_addr && cfg_locked) cfg_err <= 1'b1;
+    else if (csr_write && csr_addr == 8'(CSR_WINDOWS) && windows_bad) cfg_err <= 1'b1;
   end
 
   // ---- force_trig pending --------------------------------------------------------------------

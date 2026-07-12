@@ -61,6 +61,56 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 | 4 | Timestamps are captured in the probe domain and drained through the same FIFO as data | drain TBs (issue #8) |
 | 5 | UART is LSB-first; CRC16-CCITT is big-endian on the wire | first two assertions of `sim/tb_uart.sv` (issue #8) |
 
+## Host-side reconstruction (issue #7 — normative for the Python host, proven by tb_pretrig)
+
+A completed capture window is a circular buffer slice plus three facts: `trig_index` (the
+absolute buffer address of the trigger sample), `wrapped` (the write pointer passed the
+slice size at least once since this window armed), and the configured `PRETRIG`. The core
+does no reordering; the host reorders with exactly this math (per window; for a
+single-window capture SLICE = DEPTH and slice-relative == absolute):
+
+```
+post   = SLICE - PRETRIG_EFF          # post-trigger budget, trigger sample included
+oldest = wrapped ? (trig_index + post) mod SLICE   # slice-relative
+                 : 0
+ordered[i] = buffer[slice_base + ((oldest + i) mod SLICE)]      i = 0 .. SLICE-1
+```
+
+- The trigger sample sits at `ordered[pretrig_actual]` where `pretrig_actual =
+  wrapped ? PRETRIG_EFF : trig_index_rel` — for a COMPLETED window `wrapped` is always 1
+  (a window stores >= SLICE samples by construction: PRETRIG_EFF fill + SLICE−PRETRIG_EFF
+  post), so `pretrig_actual == PRETRIG_EFF`. The `!wrapped` branch matters only when a
+  host inspects an aborted (disarmed) capture: then only `buffer[0..wptr-1]` are valid and
+  the trigger (if any) sits at `ordered[trig_index_rel]` with fewer than PRETRIG_EFF
+  samples of history.
+- `ts_at_trig` = probe-domain time of the trigger CONSUMPTION edge = satisfying-sample
+  time + trigger LATENCY (2; see INTERFACES.md "Trigger semantics").
+
+**Worked example 1 (wrapped, the normal case).** DEPTH=8, one window (SLICE=8), PRETRIG=3,
+post = 8−3 = 5. Arm at sample 0; the trigger fires on sample index K=9 (the buffer already
+wrapped once). Sample k lands at address k mod 8, so trig_index = 9 mod 8 = **1**, and the
+capture stores through sample K+post−1 = 13. Final buffer by address:
+
+```
+addr:    0    1    2    3    4    5    6    7
+sample:  s8  s9*  s10  s11  s12  s13  s6   s7        (* = trigger sample)
+```
+
+oldest = (1 + 5) mod 8 = 6 → ordered = buffer[6],b[7],b[0],b[1],... =
+`s6 s7 s8 s9 s10 s11 s12 s13` — time order restored, and the trigger sample s9 sits at
+`ordered[3]` = ordered[PRETRIG]. ✓
+
+**Worked example 2 (not wrapped — aborted capture).** DEPTH=8, PRETRIG=3; the host disarms
+after only 5 samples were stored (s0..s4 at addresses 0..4, trigger accepted on s4 →
+trig_index=4, wrapped=0). oldest = 0 → ordered = `s0 s1 s2 s3 s4 x x x`; only the first
+wptr=5 entries are valid; the trigger sits at ordered[trig_index]=ordered[4], with
+pretrig_actual = 4 ≥ ... capped history as stored. (Completed captures never hit this
+branch.)
+
+**Multi-window:** window w occupies `slice_base = w * SLICE`; per-window `trig_index`
+(absolute) and `wrapped` come from the sideband metadata table (win_rd port / #8 DRAIN
+header); apply the same math per slice with `trig_index_rel = trig_index - slice_base`.
+
 ## Deviations from PLAN.md
 
 | Issue | Deviation | Rationale |
@@ -75,6 +125,9 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 | #6 | Probe→trig latency is **2 cycles** (not the design doc's "1-cycle") | The issue mandates registered probe history, comparator outputs, AND sequencer: that is two register stages before the fire pulse. The constant is measured and asserted in `tb_trigger_seq` and — critically — `scope_trigger.sample_o` delays the capture-data path by the same 2 cycles, so the host-visible trigger sample is exactly the satisfying sample. `ts_at_trig` = satisfying-sample time + 2 (documented in INTERFACES.md). |
 | #6 | `trig_ext_o` excludes `trig_ext_i` and pulses only on the instance's own fire (sequencer fire or force_trig rising edge) | Including ext_i would create a combinational loop when two instances are cross-connected (`A.ext_o→B.ext_i, B.ext_o→A.ext_i`). Asserted in `tb_trigger_seq`. |
 | #6 | Formal checker is instantiated inside `scope_core` under `` `ifdef FORMAL `` instead of SVA `bind` | yosys 0.33 (the local baseline) has no usable `bind`/`import` support. The properties still live in their own module/file (`formal/scope_core_fchk.sv`); synthesis and Verilator never see them. `scope_core` uses fully qualified `scope_pkg::` references (no header import) for the same yosys-compatibility reason. |
+| #7 | After the last window the FSM parks in `DONE` (not the issue text's "after the last window: IDLE") | Same rationale as the #4 deviation, reaffirmed at #7: an auto-IDLE makes a completed capture indistinguishable from never-armed while the host drains. `tb_windows` asserts the parked-DONE contract; `disarm` provides the →IDLE edge. |
+| #7 | Per-window `{wrapped, trig_index}` sideband is a `prim_ram_1r1w` (256 × DEPTH_LOG2+1), not the issue text's "flop-based table" | 255 windows × up to 16 bits ≈ 4k flops as a register table; as an inferred RAM it is one LUTRAM/BRAM with a single write per window completion and a dedicated read port (`win_rd_addr/win_rd_data`) for the #8 drain. Same TB contract, cheaper mechanism (explicitly allowed by the issue). |
+| #7 | Per-window pretrig scaling is proportional: `PRETRIG_EFF = PRETRIG >> log2(W_eff)` | Preserves the user's configured pretrig/post ratio in every slice; clamping (`min(PRETRIG, SLICE-1)`) would silently change the ratio. Defined in INTERFACES.md "Capture semantics"; `scope_ref.py` `windows_model` implements the same expression. |
 
 ## Milestone notes
 
