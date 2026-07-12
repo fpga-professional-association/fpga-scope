@@ -286,3 +286,42 @@ instances cannot form a combinational loop.
   issue #8 within this frame envelope).
 - UART is 8N1, LSB-first bit order (standard), fixed divisor `UART_DIV`; auto-baud is v2.
 - Same codec on both transports → one Python decoder (`host/fpgapa_scope/`).
+
+### #8 semantics addendum — exact byte layouts (v1, frozen)
+
+**Request handling** (host→scope): request payloads are ≤ 8 bytes. `PING` ignores its
+payload; `READ_CSR` payload = `addr(1)`; `WRITE_CSR` payload = `addr(1) value(4,BE)` — the
+response payload is 1 byte `{7'b0, cfg_err}` sampled from STATUS *after* the write.
+Oversized/`len`-mismatched frames, bad CRC, and unknown opcodes get a `NAK` response with a
+1-byte error code: `0x01` BAD_CRC, `0x02` BAD_CMD, `0x03` BAD_LEN. No timeout recovery in
+v1: the parser resynchronizes on the `0xA5 0x5C` hunt. Half-duplex discipline: the engine
+does not accept request bytes while executing/responding.
+
+**PING response payload** (8 bytes): `ID_REG(4,BE)` then `ID_VALUE(4,BE)` (the instance
+tag parameter).
+
+**DRAIN response** = one header frame (cmd=`DRAIN`) + `DEPTH/SPF` data frames
+(cmd=`DRAIN_DATA`), `SPF = min(DEPTH, 256)` samples per data frame:
+
+| Header payload bytes | Content |
+|---|---|
+| 0 | flags: bit0 = rle (RLE_CTRL[0]), bit1 = wrapped (last window), rest 0 |
+| 1 | windows_done |
+| 2–3 | trig_index (BE, most recent window, absolute buffer address) |
+| 4–9 | ts_at_trig (48-bit BE) |
+| 10 .. 10+2W−1 | per window w < windows_done: `{wrapped, trig_index[14:0]}` (2, BE) |
+
+Data frame payload: `chunk_index(2,BE)` then `SPF` samples in **raw buffer order** (the
+host reorders per DESIGN.md), each sample packed **little-endian** (bits [7:0] first) into
+`ceil(PROBE_W/8)` bytes.
+
+**Transport binding (`XPORT`)**: `"UART"` = scope_uart on `uart_rx/uart_tx` (8N1, mid-bit
+sampling, framing-error bytes dropped); `"STREAM"` = raw `rx_*/tx_*` valid/ready byte
+stream; `"CSR"` = no byte transport — the external native-CSR port (`ext_csr_*`, a v1
+interface ADDITION on scope_top for the #11 front-ends) owns the CSR bus and
+BUF_CTRL/BUF_DATA/WIN_SEL/WIN_META form the drain path.
+
+**Map addendum:** `WIN_SEL` (word 12, RW) selects the window whose `{wrapped, trig_index}`
+appears in `WIN_META` (word 13, RO; read ≥ 1 cycle after writing WIN_SEL). Added so
+CSR-only hosts and the drain engine can reach the per-window sideband table; both words
+were reserved-as-0 before.

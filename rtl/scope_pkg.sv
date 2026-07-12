@@ -43,11 +43,17 @@ package scope_pkg;
   localparam logic [7:0] SCOPE_SYNC0 = 8'hA5;
   localparam logic [7:0] SCOPE_SYNC1 = 8'h5C;
 
-  localparam logic [7:0] SCOPE_OP_PING      = 8'h01;
-  localparam logic [7:0] SCOPE_OP_READ_CSR  = 8'h02;
-  localparam logic [7:0] SCOPE_OP_WRITE_CSR = 8'h03;
-  localparam logic [7:0] SCOPE_OP_DRAIN     = 8'h04;
-  localparam logic [7:0] SCOPE_OP_NAK       = 8'h15;  // ASCII NAK; response to bad CRC/cmd
+  localparam logic [7:0] SCOPE_OP_PING       = 8'h01;
+  localparam logic [7:0] SCOPE_OP_READ_CSR   = 8'h02;
+  localparam logic [7:0] SCOPE_OP_WRITE_CSR  = 8'h03;
+  localparam logic [7:0] SCOPE_OP_DRAIN      = 8'h04;
+  localparam logic [7:0] SCOPE_OP_DRAIN_DATA = 8'h05;  // response-only: sample chunk frames
+  localparam logic [7:0] SCOPE_OP_NAK        = 8'h15;  // ASCII NAK; response to bad CRC/cmd
+
+  // NAK payload error codes (1 byte)
+  localparam logic [7:0] SCOPE_NAK_BAD_CRC = 8'h01;
+  localparam logic [7:0] SCOPE_NAK_BAD_CMD = 8'h02;
+  localparam logic [7:0] SCOPE_NAK_BAD_LEN = 8'h03;
 
   // ------------------------------------------------------------------------------------
   // CSR word offsets (byte offset = index * 4). These match docs/INTERFACES.md
@@ -66,6 +72,8 @@ package scope_pkg;
   localparam int unsigned CSR_TRIG_INDEX     = 9;
   localparam int unsigned CSR_TSTRIG_LO      = 10;
   localparam int unsigned CSR_TSTRIG_HI      = 11;
+  localparam int unsigned CSR_WIN_SEL        = 12;  // window selector for WIN_META (v1 #8 addendum)
+  localparam int unsigned CSR_WIN_META       = 13;  // RO: {wrapped, trig_index} of selected window
   localparam int unsigned CSR_CMP_SEL        = 15;  // [1:0] comparator k, [3:2] field
   localparam int unsigned CSR_CMP_LANE_BASE  = 16;  // 16..31: lane window of selected field
   localparam int unsigned CSR_CMP_LANE_WORDS = 16;

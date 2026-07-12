@@ -32,16 +32,17 @@ module prim_ff_sync #(
     output logic [WIDTH-1:0] q      // synchronized copy, STAGES clk edges later
 );
 
-  // sync_q[0] is the metastability boundary stage.
-  logic [STAGES-1:0][WIDTH-1:0] sync_q;
+  // Stage 0 (bits [WIDTH-1:0]) is the metastability boundary. Flat vector rather than a 2D
+  // packed array: the yosys formal flow (0.33 baseline) cannot parse multiple packed dims.
+  logic [STAGES*WIDTH-1:0] sync_q;
 
   if (ASYNC_RST) begin : g_arst
     always_ff @(posedge clk or posedge rst) begin
       if (rst) begin
         sync_q <= {STAGES{RESET_VAL}};
       end else begin
-        sync_q[0] <= d;
-        for (int unsigned i = 1; i < STAGES; i++) sync_q[i] <= sync_q[i-1];
+        sync_q[0+:WIDTH] <= d;
+        for (int unsigned i = 1; i < STAGES; i++) sync_q[i*WIDTH+:WIDTH] <= sync_q[(i-1)*WIDTH+:WIDTH];
       end
     end
   end else begin : g_srst
@@ -49,12 +50,12 @@ module prim_ff_sync #(
       if (rst) begin
         sync_q <= {STAGES{RESET_VAL}};
       end else begin
-        sync_q[0] <= d;
-        for (int unsigned i = 1; i < STAGES; i++) sync_q[i] <= sync_q[i-1];
+        sync_q[0+:WIDTH] <= d;
+        for (int unsigned i = 1; i < STAGES; i++) sync_q[i*WIDTH+:WIDTH] <= sync_q[(i-1)*WIDTH+:WIDTH];
       end
     end
   end
 
-  assign q = sync_q[STAGES-1];
+  assign q = sync_q[(STAGES-1)*WIDTH+:WIDTH];
 
 endmodule

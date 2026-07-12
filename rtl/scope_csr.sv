@@ -37,9 +37,7 @@
 //   * WINDOWS writes of 0 are stored as 1 (range 1..255); values > DEPTH/2 (which would
 //     make a window slice smaller than 2 samples) are rejected and set cfg_err (issue #7).
 //   * Reserved/unmapped addresses read 0; writes to them are ignored (no cfg_err).
-module scope_csr
-  import scope_pkg::*;
-#(
+module scope_csr #(
     parameter int unsigned PROBE_W    = 32,   // 1..512
     parameter int unsigned DEPTH_LOG2 = 8,    // 8..15
     parameter int unsigned NUM_CMP    = 4,    // fixed 4 in v1 (CMP_SEL[1:0])
@@ -78,6 +76,10 @@ module scope_csr
     output logic [DEPTH_LOG2-1:0]      buf_rd_addr,
     input  logic [PROBE_W-1:0]         buf_rd_data,
 
+    // per-window metadata (scope_core sideband table; WIN_SEL/WIN_META, issue #8 addendum)
+    output logic [7:0]                 win_rd_addr,
+    input  logic [DEPTH_LOG2:0]        win_rd_data,
+
     // trigger-engine configuration (consumed by scope_trigger, issue #6; flat-packed:
     // comparator k occupies bits [k*PROBE_W +: PROBE_W] / stage n bits [n*32 +: 32])
     output logic [NUM_CMP*PROBE_W-1:0] cmp_mask,
@@ -94,16 +96,16 @@ module scope_csr
   localparam int unsigned PAD_W = LANES * 32;  // lane-padded comparator storage width
 
   // ---- decode ---------------------------------------------------------------------------
-  wire wr_ctrl = csr_write && (csr_addr == 8'(CSR_CTRL));
+  wire wr_ctrl = csr_write && (csr_addr == 8'(scope_pkg::CSR_CTRL));
   wire soft_rst = wr_ctrl && csr_wdata[3];
-  wire is_lane_addr = (csr_addr >= 8'(CSR_CMP_LANE_BASE)) &&
-                      (csr_addr < 8'(CSR_CMP_LANE_BASE + CSR_CMP_LANE_WORDS));
-  wire is_seq_addr = (csr_addr >= 8'(CSR_SEQ_CNT_BASE)) &&
-                     (csr_addr < 8'(CSR_SEQ_CNT_BASE + SEQ_STAGES));
-  wire is_cfg_addr = (csr_addr == 8'(CSR_PRETRIG)) || (csr_addr == 8'(CSR_WINDOWS)) ||
-                     (csr_addr == 8'(CSR_RLE_CTRL)) || (csr_addr == 8'(CSR_CMP_SEL)) ||
-                     is_lane_addr || (csr_addr == 8'(CSR_TRIG_COMBINE)) || is_seq_addr;
-  wire cfg_locked = (state != 3'(SCOPE_ST_IDLE));
+  wire is_lane_addr = (csr_addr >= 8'(scope_pkg::CSR_CMP_LANE_BASE)) &&
+                      (csr_addr < 8'(scope_pkg::CSR_CMP_LANE_BASE + scope_pkg::CSR_CMP_LANE_WORDS));
+  wire is_seq_addr = (csr_addr >= 8'(scope_pkg::CSR_SEQ_CNT_BASE)) &&
+                     (csr_addr < 8'(scope_pkg::CSR_SEQ_CNT_BASE + SEQ_STAGES));
+  wire is_cfg_addr = (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) || (csr_addr == 8'(scope_pkg::CSR_WINDOWS)) ||
+                     (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) || (csr_addr == 8'(scope_pkg::CSR_CMP_SEL)) ||
+                     is_lane_addr || (csr_addr == 8'(scope_pkg::CSR_TRIG_COMBINE)) || is_seq_addr;
+  wire cfg_locked = (state != 3'(scope_pkg::SCOPE_ST_IDLE));
   wire cfg_wr_ok = csr_write && is_cfg_addr && !cfg_locked;
 
   // WINDOWS range check (issue #7): a slice must hold >= 2 samples, i.e. WINDOWS <= DEPTH/2
@@ -125,15 +127,19 @@ module scope_csr
   logic [7:0]  windows_q;
 
   // 32-bit write mask for lane j (zeroes bits beyond PROBE_W in the top lane)
+  // (classic function form — no `return`, integer local — for yosys-formal parseability)
   function automatic logic [31:0] lane_wmask(input logic [3:0] j);
-    int unsigned rem;
-    rem = PROBE_W - 32 * int'(j);
-    if (rem >= 32) return 32'hFFFF_FFFF;
-    else return (32'h1 << rem) - 32'h1;
+    integer rem;
+    begin
+      rem = PROBE_W - 32 * j;
+      if (rem >= 32) lane_wmask = 32'hFFFF_FFFF;
+      else if (rem <= 0) lane_wmask = 32'h0;
+      else lane_wmask = (32'h1 << rem) - 32'h1;
+    end
   endfunction
 
   wire [3:0] lane_idx = csr_addr[3:0];  // valid when is_lane_addr
-  wire [1:0] seq_idx = 2'(csr_addr - 8'(CSR_SEQ_CNT_BASE));  // valid when is_seq_addr
+  wire [1:0] seq_idx = 2'(csr_addr - 8'(scope_pkg::CSR_SEQ_CNT_BASE));  // valid when is_seq_addr
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -146,14 +152,14 @@ module scope_csr
       trig_combine_q <= 32'h0;
       for (int unsigned n = 0; n < SEQ_STAGES; n++) seq_cnt_q[n] <= 32'd1;
     end else if (cfg_wr_ok) begin
-      if (csr_addr == 8'(CSR_PRETRIG)) pretrig_q <= csr_wdata[DEPTH_LOG2-1:0];
-      if (csr_addr == 8'(CSR_WINDOWS) && !windows_bad) windows_q <= windows_wval;
-      if (csr_addr == 8'(CSR_RLE_CTRL)) rle_enable_q <= csr_wdata[0];
-      if (csr_addr == 8'(CSR_CMP_SEL)) cmp_sel_q <= csr_wdata[3:0];
-      if (is_lane_addr && (32 * int'(lane_idx) < PROBE_W))
+      if (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) pretrig_q <= csr_wdata[DEPTH_LOG2-1:0];
+      if (csr_addr == 8'(scope_pkg::CSR_WINDOWS) && !windows_bad) windows_q <= windows_wval;
+      if (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) rle_enable_q <= csr_wdata[0];
+      if (csr_addr == 8'(scope_pkg::CSR_CMP_SEL)) cmp_sel_q <= csr_wdata[3:0];
+      if (is_lane_addr && (32 * 32'(lane_idx) < PROBE_W))
         cmp_q[cmp_sel_q[3:2]][cmp_sel_q[1:0]][32*lane_idx+:32] <= csr_wdata & lane_wmask(
             lane_idx);
-      if (csr_addr == 8'(CSR_TRIG_COMBINE)) trig_combine_q <= csr_wdata;
+      if (csr_addr == 8'(scope_pkg::CSR_TRIG_COMBINE)) trig_combine_q <= csr_wdata;
       if (is_seq_addr) seq_cnt_q[seq_idx] <= csr_wdata;
     end
   end
@@ -163,13 +169,13 @@ module scope_csr
   assign rle_enable   = rle_enable_q;
   assign trig_combine = trig_combine_q;
 
-  for (genvar k = 0; k < int'(NUM_CMP); k++) begin : g_cmp_out
-    assign cmp_mask[k*PROBE_W+:PROBE_W]      = cmp_q[CMP_FIELD_MASK][k][PROBE_W-1:0];
-    assign cmp_value[k*PROBE_W+:PROBE_W]     = cmp_q[CMP_FIELD_VALUE][k][PROBE_W-1:0];
-    assign cmp_edge_mask[k*PROBE_W+:PROBE_W] = cmp_q[CMP_FIELD_EDGE_MASK][k][PROBE_W-1:0];
-    assign cmp_edge_pol[k*PROBE_W+:PROBE_W]  = cmp_q[CMP_FIELD_EDGE_POL][k][PROBE_W-1:0];
+  for (genvar k = 0; k < 32'(NUM_CMP); k++) begin : g_cmp_out
+    assign cmp_mask[k*PROBE_W+:PROBE_W]      = cmp_q[scope_pkg::CMP_FIELD_MASK][k][PROBE_W-1:0];
+    assign cmp_value[k*PROBE_W+:PROBE_W]     = cmp_q[scope_pkg::CMP_FIELD_VALUE][k][PROBE_W-1:0];
+    assign cmp_edge_mask[k*PROBE_W+:PROBE_W] = cmp_q[scope_pkg::CMP_FIELD_EDGE_MASK][k][PROBE_W-1:0];
+    assign cmp_edge_pol[k*PROBE_W+:PROBE_W]  = cmp_q[scope_pkg::CMP_FIELD_EDGE_POL][k][PROBE_W-1:0];
   end
-  for (genvar n = 0; n < int'(SEQ_STAGES); n++) begin : g_seq_out
+  for (genvar n = 0; n < 32'(SEQ_STAGES); n++) begin : g_seq_out
     assign seq_cnt[n*32+:32] = seq_cnt_q[n];
   end
 
@@ -178,7 +184,7 @@ module scope_csr
     if (rst) cfg_err <= 1'b0;
     else if (soft_rst) cfg_err <= 1'b0;
     else if (csr_write && is_cfg_addr && cfg_locked) cfg_err <= 1'b1;
-    else if (csr_write && csr_addr == 8'(CSR_WINDOWS) && windows_bad) cfg_err <= 1'b1;
+    else if (csr_write && csr_addr == 8'(scope_pkg::CSR_WINDOWS) && windows_bad) cfg_err <= 1'b1;
   end
 
   // ---- force_trig pending --------------------------------------------------------------------
@@ -187,9 +193,9 @@ module scope_csr
     if (rst) force_pend <= 1'b0;
     else if (wr_ctrl && (csr_wdata[1] || csr_wdata[3])) force_pend <= 1'b0;  // disarm/soft_rst
     else if (wr_ctrl && csr_wdata[2] &&
-             (state == 3'(SCOPE_ST_FILLING) || state == 3'(SCOPE_ST_ARMED)))
+             (state == 3'(scope_pkg::SCOPE_ST_FILLING) || state == 3'(scope_pkg::SCOPE_ST_ARMED)))
       force_pend <= 1'b1;
-    else if (state != 3'(SCOPE_ST_FILLING) && state != 3'(SCOPE_ST_ARMED))
+    else if (state != 3'(scope_pkg::SCOPE_ST_FILLING) && state != 3'(scope_pkg::SCOPE_ST_ARMED))
       force_pend <= 1'b0;  // accepted (TRIGGERED) or run ended
   end
   assign force_trig = force_pend;
@@ -198,10 +204,10 @@ module scope_csr
   localparam int unsigned LANE_CNT_W = (LANES > 1) ? $clog2(LANES) : 1;
   logic [DEPTH_LOG2-1:0] drain_addr;
   logic [LANE_CNT_W-1:0] drain_lane;
-  wire pop = csr_read && (csr_addr == 8'(CSR_BUF_DATA));
+  wire pop = csr_read && (csr_addr == 8'(scope_pkg::CSR_BUF_DATA));
 
   always_ff @(posedge clk) begin
-    if (rst || soft_rst || (csr_write && csr_addr == 8'(CSR_BUF_CTRL) && csr_wdata[0])) begin
+    if (rst || soft_rst || (csr_write && csr_addr == 8'(scope_pkg::CSR_BUF_CTRL) && csr_wdata[0])) begin
       drain_addr <= '0;
       drain_lane <= '0;
     end else if (pop) begin
@@ -218,36 +224,48 @@ module scope_csr
   // lane-padded view of the RAM output register (bits beyond PROBE_W read 0)
   wire [PAD_W-1:0] buf_ext = PAD_W'(buf_rd_data);
 
+  // ---- WIN_SEL selector (plain register, writable in any state — it only selects which
+  //      window the RO WIN_META view shows; the metadata RAM read has 1-cycle latency, so
+  //      read WIN_META no earlier than the cycle after writing WIN_SEL) -----------------------
+  logic [7:0] win_sel_q;
+  always_ff @(posedge clk) begin
+    if (rst || soft_rst) win_sel_q <= 8'h00;
+    else if (csr_write && csr_addr == 8'(scope_pkg::CSR_WIN_SEL)) win_sel_q <= csr_wdata[7:0];
+  end
+  assign win_rd_addr = win_sel_q;
+
   // ---- TS shadow --------------------------------------------------------------------------------
   logic [TS_W-33:0] ts_hi_shadow;
   always_ff @(posedge clk) begin
     if (rst || soft_rst) ts_hi_shadow <= '0;
-    else if (csr_read && csr_addr == 8'(CSR_TS_LO)) ts_hi_shadow <= ts[TS_W-1:32];
+    else if (csr_read && csr_addr == 8'(scope_pkg::CSR_TS_LO)) ts_hi_shadow <= ts[TS_W-1:32];
   end
 
   // ---- combinational read mux ---------------------------------------------------------------------
   always_comb begin
     csr_rdata = 32'h0;
-    if (csr_addr == 8'(CSR_ID)) csr_rdata = SCOPE_ID_REG;
-    else if (csr_addr == 8'(CSR_HWCFG))
+    if (csr_addr == 8'(scope_pkg::CSR_ID)) csr_rdata = scope_pkg::SCOPE_ID_REG;
+    else if (csr_addr == 8'(scope_pkg::CSR_HWCFG))
       csr_rdata = {13'h0, RLE_EN, 4'(NUM_CMP), 4'(DEPTH_LOG2), 10'(PROBE_W)};
-    else if (csr_addr == 8'(CSR_STATUS))
+    else if (csr_addr == 8'(scope_pkg::CSR_STATUS))
       csr_rdata = {16'h0, windows_done, 2'b00, cfg_err, wrapped, triggered, state};
-    else if (csr_addr == 8'(CSR_PRETRIG)) csr_rdata = 32'(pretrig_q);
-    else if (csr_addr == 8'(CSR_WINDOWS)) csr_rdata = 32'(windows_q);
-    else if (csr_addr == 8'(CSR_RLE_CTRL)) csr_rdata = {31'h0, rle_enable_q};
-    else if (csr_addr == 8'(CSR_TS_LO)) csr_rdata = ts[31:0];
-    else if (csr_addr == 8'(CSR_TS_HI)) csr_rdata = 32'(ts_hi_shadow);
-    else if (csr_addr == 8'(CSR_TRIG_INDEX)) csr_rdata = 32'(trig_index);
-    else if (csr_addr == 8'(CSR_TSTRIG_LO)) csr_rdata = ts_at_trig[31:0];
-    else if (csr_addr == 8'(CSR_TSTRIG_HI)) csr_rdata = 32'(ts_at_trig[TS_W-1:32]);
-    else if (csr_addr == 8'(CSR_CMP_SEL)) csr_rdata = 32'(cmp_sel_q);
+    else if (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) csr_rdata = 32'(pretrig_q);
+    else if (csr_addr == 8'(scope_pkg::CSR_WINDOWS)) csr_rdata = 32'(windows_q);
+    else if (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) csr_rdata = {31'h0, rle_enable_q};
+    else if (csr_addr == 8'(scope_pkg::CSR_TS_LO)) csr_rdata = ts[31:0];
+    else if (csr_addr == 8'(scope_pkg::CSR_TS_HI)) csr_rdata = 32'(ts_hi_shadow);
+    else if (csr_addr == 8'(scope_pkg::CSR_TRIG_INDEX)) csr_rdata = 32'(trig_index);
+    else if (csr_addr == 8'(scope_pkg::CSR_TSTRIG_LO)) csr_rdata = ts_at_trig[31:0];
+    else if (csr_addr == 8'(scope_pkg::CSR_TSTRIG_HI)) csr_rdata = 32'(ts_at_trig[TS_W-1:32]);
+    else if (csr_addr == 8'(scope_pkg::CSR_WIN_SEL)) csr_rdata = 32'(win_sel_q);
+    else if (csr_addr == 8'(scope_pkg::CSR_WIN_META)) csr_rdata = 32'(win_rd_data);
+    else if (csr_addr == 8'(scope_pkg::CSR_CMP_SEL)) csr_rdata = 32'(cmp_sel_q);
     else if (is_lane_addr) begin
-      if (32 * int'(lane_idx) < PROBE_W)
+      if (32 * 32'(lane_idx) < PROBE_W)
         csr_rdata = cmp_q[cmp_sel_q[3:2]][cmp_sel_q[1:0]][32*lane_idx+:32];
-    end else if (csr_addr == 8'(CSR_TRIG_COMBINE)) csr_rdata = trig_combine_q;
+    end else if (csr_addr == 8'(scope_pkg::CSR_TRIG_COMBINE)) csr_rdata = trig_combine_q;
     else if (is_seq_addr) csr_rdata = seq_cnt_q[seq_idx];
-    else if (csr_addr == 8'(CSR_BUF_DATA)) csr_rdata = buf_ext[32*drain_lane+:32];
+    else if (csr_addr == 8'(scope_pkg::CSR_BUF_DATA)) csr_rdata = buf_ext[32*drain_lane+:32];
     // CTRL, BUF_CTRL, reserved: read 0
   end
 

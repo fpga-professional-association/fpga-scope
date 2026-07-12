@@ -40,3 +40,6 @@ jobs:
 
       - name: Prove scope_core properties (a) and (b)
         run: cd formal && sby -f scope_core.sby
+
+      - name: Check scope_top property (d) — drain/FIFO discipline
+        run: cd formal && sby -f scope_top.sby

@@ -397,12 +397,46 @@ def cmd_trigger_suite(args):
     print(f"scope_ref: {args.out_prefix}: {len(cases)} {args.suite} cases x {spc} samples")
 
 
+def crc16_ccitt(data, crc=0xFFFF):
+    """CRC16-CCITT poly 0x1021 init 0xFFFF, MSB-first — the wire CRC (independent of the
+    SV implementation in scope_pkg)."""
+    for b in data:
+        crc ^= (b & 0xFF) << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def cmd_drain_data(args):
+    """Expected DRAIN_DATA frame byte stream (issue #8) for a buffer .mem produced by the
+    capture/windows models: chunked frames of SPF=min(DEPTH,256) samples, each sample
+    packed little-endian into ceil(PROBE_W/8) bytes, envelope + CRC per INTERFACES.md."""
+    with open(args.buf_in) as f:
+        buf = [int(line, 16) for line in f if line.strip()]
+    depth = len(buf)
+    nb = (args.probe_w + 7) // 8
+    spf = min(depth, 256)
+    chunks = depth // spf
+    out = []
+    for c in range(chunks):
+        payload = [(c >> 8) & 0xFF, c & 0xFF]
+        for s_i in range(c * spf, (c + 1) * spf):
+            payload += [(buf[s_i] >> (8 * i)) & 0xFF for i in range(nb)]
+        body = [0x05] + [(len(payload) >> 8) & 0xFF, len(payload) & 0xFF] + payload
+        crc = crc16_ccitt(body)
+        out += [0xA5, 0x5C] + body + [(crc >> 8) & 0xFF, crc & 0xFF]
+    write_mem(f"{args.out_prefix}_dframes.mem", out, 2)
+    print(f"scope_ref: {args.out_prefix}: {chunks} DRAIN_DATA frames, {len(out)} bytes")
+
+
 def cmd_capture(args):
     if args.stim_in:
         with open(args.stim_in) as f:
             stim = [int(line, 16) for line in f if line.strip()]
     else:
         stim = gen_stimulus(args.seed, args.count, args.probe_w)
+        if args.idle_prefix:
+            stim = [0] * args.idle_prefix + stim[:len(stim) - args.idle_prefix]
 
     buf, trig_index, wrapped, consumed = capture_model(
         stim, args.depth_log2, args.pretrig, args.trig_sample)
@@ -447,8 +481,16 @@ def main(argv):
     c.add_argument("--count", type=int, required=True, help="stimulus samples to generate")
     c.add_argument("--stim-in", default=None,
                    help="read stimulus from file (one hex vector per line) instead of generating")
+    c.add_argument("--idle-prefix", type=int, default=0,
+                   help="replace the first N stimulus entries with 0 (pre-arm idle probe)")
     c.add_argument("--out-prefix", required=True)
     c.set_defaults(func=cmd_capture)
+
+    d = sub.add_parser("drain-data", help="expected DRAIN_DATA frame bytes for tb_drain_cdc")
+    d.add_argument("--probe-w", type=int, required=True)
+    d.add_argument("--buf-in", required=True, help="buffer .mem from a capture/windows run")
+    d.add_argument("--out-prefix", required=True)
+    d.set_defaults(func=cmd_drain_data)
 
     w = sub.add_parser("windows", help="multi-window capture expectation for tb_windows")
     w.add_argument("--probe-w", type=int, required=True)

@@ -107,6 +107,8 @@ module tb_csr_leg
       .ts_at_trig   (ts_at_trig),
       .buf_rd_addr  (buf_rd_addr),
       .buf_rd_data  (buf_rd_data),
+      .win_rd_addr  (win_rd_addr),
+      .win_rd_data  (win_rd_data),
       .cmp_mask     (cmp_mask),
       .cmp_value    (cmp_value),
       .cmp_edge_mask(cmp_edge_mask),
@@ -138,13 +140,14 @@ module tb_csr_leg
       .armed       (armed),
       .rd_addr     (buf_rd_addr),
       .rd_data     (buf_rd_data),
-      .win_rd_addr (8'h0),
-      .win_rd_data (unused_win_meta),
+      .win_rd_addr (win_rd_addr),
+      .win_rd_data (win_rd_data),
       .ts          (ts),
       .ts_at_trig  (ts_at_trig)
   );
 
-  logic [DEPTH_LOG2:0] unused_win_meta;
+  logic [7:0] win_rd_addr;
+  logic [DEPTH_LOG2:0] win_rd_data;
 
   // ---- golden vectors ----------------------------------------------------------------------
   logic [PROBE_W-1:0] stim[N_STIM];

@@ -66,6 +66,14 @@ gen_vectors() {
   python3 "$SIM/model/scope_ref.py" windows --probe-w 32 --depth-log2 8 --pretrig 64 \
     --windows 8 --trig-rel 9,60,2,130,0,45,20,71 --count 4000 \
     --out-prefix "$BUILD/vectors/win_w8" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  # tb_drain_cdc (issue #8): stored sample K=300 (matches the K localparam in the TB);
+  # first 2 stimulus entries are the pre-arm idle zeros (trigger sample_o pipe depth)
+  python3 "$SIM/model/scope_ref.py" capture --probe-w 32 --depth-log2 8 --pretrig 0 \
+    --trig-sample 300 --count 564 --seed 0xD4A1DA7A --idle-prefix 2 \
+    --out-prefix "$BUILD/vectors/drn" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" drain-data --probe-w 32 \
+    --buf-in "$BUILD/vectors/drn_buf.mem" \
+    --out-prefix "$BUILD/vectors/drn" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
 }
 
 # Source order: package first (scope_pkg, issue #4), then rtl/prim primitives (issue #3),
@@ -83,6 +91,9 @@ COMMON_SRCS=(
   "$RTL/scope_core.sv"
   "$RTL/scope_csr.sv"
   "$RTL/scope_trigger.sv"
+  "$RTL/scope_drain.sv"
+  "$RTL/xport/scope_uart.sv"
+  "$RTL/scope_top.sv"
   # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
   # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
@@ -136,6 +147,24 @@ run_one tb_trigger_cmp.sv     tb_trigger_cmp      # issue #6: comparator truth t
 run_one tb_trigger_seq.sv     tb_trigger_seq      # issue #6: sequencer configs, latency + alignment asserts
 run_one tb_pretrig.sv         tb_pretrig          # issue #7: PRETRIG sweep + host-math reconstruction
 run_one tb_windows.sv         tb_windows          # issue #7: window slicing, metadata, disarm, cfg_err bound
+run_one tb_drain_cdc.sv       tb_drain_cdc        # issue #8: scope_top over byte stream, xclk!=clk, NAK/resync
+run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LSB-first + BE-CRC asserts first
+
+# scope_top elaboration matrix (issue #8): PROBE_W {8, 512} x XPORT {UART, STREAM} beyond
+# the fully-tested TB configs — lint-only builds, same -Wall flags.
+for pw in 8 512; do
+  for xp in UART STREAM; do
+    echo "== Lint matrix: scope_top PROBE_W=$pw XPORT=$xp"
+    if ! verilator --lint-only --timing -Wall --timescale 1ns/1ps \
+          -I"$RTL" -I"$RTL/if" -I"$RTL/xport" -I"$RTL/prim" \
+          --top-module scope_top -GPROBE_W="$pw" -GXPORT="\"$xp\"" \
+          ${COMMON_SRCS[@]+"${COMMON_SRCS[@]}"} > "$BUILD/lint_${pw}_${xp}.log" 2>&1; then
+      cat "$BUILD/lint_${pw}_${xp}.log"
+      echo "TB_RESULT: FAIL (lint matrix PROBE_W=$pw XPORT=$xp)"
+      overall=1
+    fi
+  done
+done
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then

@@ -193,6 +193,7 @@ module tb_windows
   logic unused_csr_arm, unused_csr_disarm, unused_csr_force, unused_csr_rle;
   logic [DEPTH_LOG2-1:0] unused_csr_pretrig;
   logic [DEPTH_LOG2-1:0] unused_csr_buf_addr;
+  logic [7:0] unused_csr_win_addr;
   logic [4*PROBE_W-1:0] unused_csr_m, unused_csr_v, unused_csr_em, unused_csr_ep;
   logic [31:0] unused_csr_comb;
   logic [4*32-1:0] unused_csr_seq;
@@ -223,6 +224,8 @@ module tb_windows
       .ts_at_trig   (48'h0),
       .buf_rd_addr  (unused_csr_buf_addr),
       .buf_rd_data  ({PROBE_W{1'b0}}),
+      .win_rd_addr  (unused_csr_win_addr),
+      .win_rd_data  ({(DEPTH_LOG2+1){1'b0}}),
       .cmp_mask     (unused_csr_m),
       .cmp_value    (unused_csr_v),
       .cmp_edge_mask(unused_csr_em),

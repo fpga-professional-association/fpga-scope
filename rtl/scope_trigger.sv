@@ -37,9 +37,7 @@
 //   * `trig_ext_o` = own fire only: sequencer fire pulse OR the rising edge of force_trig
 //     (1 cycle wide). trig_ext_i is deliberately EXCLUDED so two cross-connected instances
 //     cannot form a combinational loop. trig_ext_i must be synchronous to clk.
-module scope_trigger
-  import scope_pkg::*;
-#(
+module scope_trigger #(
     parameter int unsigned PROBE_W    = 32,
     parameter int unsigned NUM_CMP    = 4,   // fixed 4 in v1 (TRIG_COMBINE packing)
     parameter int unsigned SEQ_STAGES = 4    // fixed 4 in v1
@@ -88,7 +86,7 @@ module scope_trigger
   wire [PROBE_W-1:0] fall = probe_d1 & ~probe;
 
   logic [NUM_CMP-1:0] cmp_hit_q;
-  for (genvar k = 0; k < int'(NUM_CMP); k++) begin : g_cmp
+  for (genvar k = 0; k < 32'(NUM_CMP); k++) begin : g_cmp
     wire [PROBE_W-1:0] mask_k = cmp_mask[k*PROBE_W+:PROBE_W];
     wire [PROBE_W-1:0] value_k = cmp_value[k*PROBE_W+:PROBE_W];
     wire [PROBE_W-1:0] emask_k = cmp_edge_mask[k*PROBE_W+:PROBE_W];
@@ -109,7 +107,7 @@ module scope_trigger
   logic [SEQ_STAGES-1:0] stage_en;
   logic [SEQ_STAGES-1:0] stage_hit;
   logic [31:0] tgt[SEQ_STAGES];
-  for (genvar n = 0; n < int'(SEQ_STAGES); n++) begin : g_stage
+  for (genvar n = 0; n < 32'(SEQ_STAGES); n++) begin : g_stage
     wire [NUM_CMP-1:0] sel = trig_combine[8*n+:NUM_CMP];
     wire and_mode = trig_combine[8*n+4];
     assign stage_en[n] = |sel;
@@ -118,11 +116,15 @@ module scope_trigger
   end
 
   // lowest enabled stage index >= from, or SEQ_STAGES if none
-  function automatic logic [2:0] first_en_from(input int unsigned from,
+  // (classic function form — integer locals/args — for yosys-formal parseability)
+  function automatic logic [2:0] first_en_from(input integer from,
                                                input logic [SEQ_STAGES-1:0] en);
-    first_en_from = 3'(SEQ_STAGES);
-    for (int i = int'(SEQ_STAGES) - 1; i >= 0; i--)
-      if (i >= int'(from) && en[i]) first_en_from = 3'(i);
+    integer i;
+    begin
+      first_en_from = 3'(SEQ_STAGES);
+      for (i = 32'(SEQ_STAGES) - 1; i >= 0; i = i - 1)
+        if (i >= from && en[i]) first_en_from = 3'(i);
+    end
   endfunction
 
   // TRIG_COMBINE bits [8n+7:8n+5] are reserved-as-0 (INTERFACES.md) — read but ignored.
@@ -138,7 +140,7 @@ module scope_trigger
   wire cur_valid = (cur < 3'(SEQ_STAGES));
   wire cur_hit = cur_valid && stage_hit[cur[1:0]];
   wire stage_done = cur_hit && (occ + 32'd1 >= tgt[cur[1:0]]);
-  wire [2:0] nxt = first_en_from(int'(cur) + 1, stage_en);
+  wire [2:0] nxt = first_en_from(32'(cur) + 1, stage_en);
   wire fire_now = run && !fired && stage_done && (nxt == 3'(SEQ_STAGES));
 
   always_ff @(posedge clk) begin
