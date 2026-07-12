@@ -17,7 +17,11 @@ BUILD="$SIM/build"
 # then sim/model helpers, then the TB itself (appended per run_one call).
 COMMON_SRCS=(
   # -- package (issue #4): rtl/scope_pkg.sv
-  # -- primitives (issue #3): prim_ff_sync, prim_ram_1r1w, prim_fifo_sync, prim_fifo_async
+  # -- primitives (issue #3):
+  "$RTL/prim/prim_ff_sync.sv"
+  "$RTL/prim/prim_ram_1r1w.sv"
+  "$RTL/prim/prim_fifo_sync.sv"
+  "$RTL/prim/prim_fifo_async.sv"
   # -- core RTL (issues #4..#9): scope_core, scope_csr, scope_trigger, scope_rle, scope_drain, scope_top
   # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
   # -- sim models: none yet
@@ -25,7 +29,9 @@ COMMON_SRCS=(
 
 # -Wall with no waivers. Add waivers only when strictly needed, each with a one-line
 # justification comment (hyperram VFLAGS block is the precedent).
-VFLAGS=(--binary --timing -Wall
+# --timescale gives RTL files (which carry no timescale directive, per convention) the same
+# 1ns/1ps scale as the TBs so -Wall's TIMESCALEMOD stays clean without per-file directives.
+VFLAGS=(--binary --timing -Wall --timescale 1ns/1ps
         -I"$RTL" -I"$RTL/if" -I"$RTL/xport" -I"$RTL/prim" -j 4)
 
 overall=0
@@ -58,7 +64,10 @@ run_one() {
   fi
 }
 
-run_one tb_smoke.sv tb_smoke    # issue #2: harness/CI plumbing proof
+run_one tb_smoke.sv           tb_smoke            # issue #2: harness/CI plumbing proof
+run_one tb_prim_ram.sv        tb_prim_ram         # issue #3: RAM read-during-write "old data" policy
+run_one tb_prim_fifo_sync.sv  tb_prim_fifo_sync   # issue #3: sync FIFO fill/drain/boundary + scoreboard soak
+run_one tb_prim_fifo_async.sv tb_prim_fifo_async  # issue #3: async FIFO 3:1 / 1:3 / ~1:1 CDC soak, >=100k/leg
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then

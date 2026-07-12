@@ -62,8 +62,10 @@ sibling repos unchanged.
 
 ### `prim_ff_sync` — N-stage flip-flop synchronizer
 
-Parameters: `WIDTH` (default 1), `STAGES` (default 2). For quasi-static level/flag signals
-only — never multi-bit buses that change per-cycle.
+Parameters: `WIDTH` (default 1), `STAGES` (default 2), `ASYNC_RST` (default 0: sync reset;
+1: async-assert reset), `RESET_VAL` (default '0). For quasi-static level/flag signals or
+gray-coded values (≤1 bit changes per source edge) only — never multi-bit binary buses that
+change per-cycle.
 
 | Port | Dir | Width | Notes |
 |---|---|---|---|
@@ -90,9 +92,10 @@ same-address read returns pre-write content). No reset on the array; no bypass l
 
 ### `prim_fifo_sync` — single-clock FIFO (FWFT)
 
-Parameters: `WIDTH`, `DEPTH_LOG2` (capacity = 2^`DEPTH_LOG2`). First-word-fall-through:
-`rd_data` is valid whenever `rd_valid` is high; pop on `rd_valid && rd_ready`. Storage is
-`prim_ram_1r1w`.
+Parameters: `WIDTH`, `DEPTH_LOG2` (capacity = exactly 2^`DEPTH_LOG2` items, the FWFT output
+stage counted; the full flag is exact). First-word-fall-through: `rd_data` is valid whenever
+`rd_valid` is high; pop on `rd_valid && rd_ready`; `rd_valid` may lag a push into an empty
+FIFO by ≤2 cycles (prefetch fill). Storage is `prim_ram_1r1w`.
 
 | Port | Dir | Width | Notes |
 |---|---|---|---|
@@ -108,7 +111,12 @@ Parameters: `WIDTH`, `DEPTH_LOG2` (capacity = 2^`DEPTH_LOG2`). First-word-fall-t
 
 Same handshake contract as `prim_fifo_sync`; classic Cummings design (binary pointers
 gray-encoded, crossed with `prim_ff_sync`, full/empty from synchronized opposite-domain
-pointers). Parameters: `WIDTH`, `DEPTH_LOG2`, `SYNC_STAGES` (default 2).
+pointers). Parameters: `WIDTH`, `DEPTH_LOG2`, `SYNC_STAGES` (default 2). Usable capacity is
+2^`DEPTH_LOG2` + 1 items (RAM ring plus the FWFT output stage). Storage is a flop/LUTRAM
+array (not `prim_ram_1r1w`, which is single-clock) — intended for shallow CDC crossings.
+Flags are exact but pessimistic across the pointer synchronizers: `wr_ready` may hold low up
+to 2×`SYNC_STAGES` wclk after the read side frees space; a pushed word becomes `rd_valid`
+after ~`SYNC_STAGES`+2 rclk. Never overflows, underflows, drops, duplicates, or reorders.
 
 | Port | Dir | Width | Notes |
 |---|---|---|---|
