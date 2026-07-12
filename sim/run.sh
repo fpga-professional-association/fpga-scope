@@ -12,19 +12,41 @@ RTL="$ROOT/rtl"
 SIM="$ROOT/sim"
 BUILD="$SIM/build"
 
+# TBs load run.sh-generated golden vectors via repo-root-relative paths ($readmemh).
+cd "$ROOT"
+
+# Golden vectors (issue #4+): scope_ref.py replays the TB stimulus and writes the expected
+# results as .mem files BEFORE the TBs run — no manual pre-steps.
+gen_vectors() {
+  echo "=================================================================="
+  echo "== Generating golden vectors (sim/model/scope_ref.py)"
+  echo "=================================================================="
+  mkdir -p "$BUILD/vectors"
+  # tb_capture_basic leg A: PROBE_W=32, DEPTH_LOG2=8, force-trig at sample DEPTH/2
+  python3 "$SIM/model/scope_ref.py" capture --probe-w 32 --depth-log2 8 --pretrig 0 \
+    --trig-sample 128 --count 640 --seed 0xC0FFEE01 \
+    --out-prefix "$BUILD/vectors/cap_w32_d8" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  # tb_capture_basic leg B: PROBE_W=512, DEPTH_LOG2=10
+  python3 "$SIM/model/scope_ref.py" capture --probe-w 512 --depth-log2 10 --pretrig 0 \
+    --trig-sample 512 --count 2560 --seed 0xC0FFEE02 \
+    --out-prefix "$BUILD/vectors/cap_w512_d10" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+}
+
 # Source order: package first (scope_pkg, issue #4), then rtl/prim primitives (issue #3),
 # then core RTL (issues #4..#9), then rtl/if + rtl/xport front-ends (issues #8, #11),
 # then sim/model helpers, then the TB itself (appended per run_one call).
 COMMON_SRCS=(
-  # -- package (issue #4): rtl/scope_pkg.sv
+  # -- package first:
+  "$RTL/scope_pkg.sv"
   # -- primitives (issue #3):
   "$RTL/prim/prim_ff_sync.sv"
   "$RTL/prim/prim_ram_1r1w.sv"
   "$RTL/prim/prim_fifo_sync.sv"
   "$RTL/prim/prim_fifo_async.sv"
-  # -- core RTL (issues #4..#9): scope_core, scope_csr, scope_trigger, scope_rle, scope_drain, scope_top
+  # -- core RTL (issues #4..#9): scope_core, then scope_csr, scope_trigger, scope_rle, scope_drain, scope_top
+  "$RTL/scope_core.sv"
   # -- front-ends (issues #8, #11): rtl/xport/scope_uart.sv, rtl/if/scope_avalon.sv, rtl/if/scope_axil.sv
-  # -- sim models: none yet
+  # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
 
 # -Wall with no waivers. Add waivers only when strictly needed, each with a one-line
@@ -64,10 +86,13 @@ run_one() {
   fi
 }
 
+gen_vectors
+
 run_one tb_smoke.sv           tb_smoke            # issue #2: harness/CI plumbing proof
 run_one tb_prim_ram.sv        tb_prim_ram         # issue #3: RAM read-during-write "old data" policy
 run_one tb_prim_fifo_sync.sv  tb_prim_fifo_sync   # issue #3: sync FIFO fill/drain/boundary + scoreboard soak
 run_one tb_prim_fifo_async.sv tb_prim_fifo_async  # issue #3: async FIFO 3:1 / 1:3 / ~1:1 CDC soak, >=100k/leg
+run_one tb_capture_basic.sv   tb_capture_basic    # issue #4: scope_core capture bit-exact vs scope_ref.py
 
 echo "=================================================================="
 if [ "$overall" -eq 0 ]; then
