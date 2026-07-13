@@ -372,6 +372,96 @@ def _trigger_cases(suite, probe_w):
     return cases
 
 
+# ---------------------------------------------------------------------------------------
+# Run-length encoder / decoder (issue #9). Words are (is_count, value):
+#   * data word  (is_count=0): value = a probe sample that differs from its predecessor.
+#   * count word (is_count=1): value = N, "the current data value repeated N more times",
+#     N in 1..(2^CNT_W - 1); a run longer than that emits successive count words (the data
+#     value is unchanged, so no new data word is needed after a saturated count).
+# Alternating input => all data words, no counts => words == samples (no expansion). Any
+# run of length R>=2 => 1 + ceil((R-1)/max_run) words <= R. So words <= samples always; the
+# RTL adds at most one in-flight (skid) word at flush, i.e. words <= samples + 1 (formal c).
+# ---------------------------------------------------------------------------------------
+
+def rle_encode(samples, cnt_w):
+    """Return the canonical (is_count, value) word list for a raw sample list."""
+    max_run = (1 << cnt_w) - 1
+    words = []
+    i, n = 0, len(samples)
+    while i < n:
+        v = samples[i]
+        words.append((0, v))       # data word (value changed, or first sample)
+        i += 1
+        while i < n and samples[i] == v:
+            r = 0
+            while i < n and samples[i] == v and r < max_run:
+                r += 1
+                i += 1
+            words.append((1, r))   # count word: v repeated r more times
+    return words
+
+
+def rle_decode(words):
+    """Inverse of rle_encode: (is_count, value) words -> raw sample list."""
+    out, v = [], None
+    for is_count, val in words:
+        if is_count == 0:
+            v = val
+            out.append(v)
+        else:
+            out += [v] * val
+    return out
+
+
+def rle_selftest():
+    """decode(encode(x)) == x across directed + pseudo-random inputs and count widths."""
+    directed = [
+        [], [5], [7, 7, 7, 7], [1, 2, 3, 4, 5], [9, 9, 8, 8, 8, 9],
+        [0] * 300, [i % 2 for i in range(200)], [3] * 1 + [4] * 40 + [3] * 40,
+    ]
+    for cnt_w in (2, 3, 8, 12):
+        for x in directed:
+            assert rle_decode(rle_encode(x, cnt_w)) == x, (cnt_w, x[:8])
+        x = 0xDEADBEEF
+        for probe_w in (4, 8):
+            seq = []
+            for _ in range(2000):
+                x = xorshift32(x)
+                # bias toward runs: sometimes repeat the previous value
+                seq.append(seq[-1] if seq and (x & 3) else (x & ((1 << probe_w) - 1)))
+            assert rle_decode(rle_encode(seq, cnt_w)) == seq, (cnt_w, probe_w)
+    return True
+
+
+def cmd_rle(args):
+    """Emit RLE vectors for tb_rle: raw samples, encoded words {is_count<<PROBE_W | value},
+    and meta (sample count, word count). Word .mem digits cover PROBE_W+1 bits."""
+    rle_selftest()
+    if args.stim_in:
+        with open(args.stim_in) as f:
+            samples = [int(line, 16) for line in f if line.strip()]
+    else:
+        samples = gen_stimulus(args.seed, args.count, args.probe_w)
+        if args.runs:  # bias toward runs: hold each value for a pseudo-random dwell
+            held, x = [], args.seed & MASK32
+            for s in samples:
+                x = xorshift32(x)
+                held += [s] * (1 + (x % args.runs))
+            samples = held[:args.count] if args.count <= len(held) else held
+    words = rle_encode(samples, args.cnt_w)
+    packed = [((ic & 1) << args.probe_w) | (val & ((1 << args.probe_w) - 1))
+              for ic, val in words]
+    sdig = (args.probe_w + 3) // 4
+    wdig = (args.probe_w + 1 + 3) // 4
+    write_mem(f"{args.out_prefix}_samples.mem", samples, sdig)
+    write_mem(f"{args.out_prefix}_words.mem", packed, wdig)
+    write_mem(f"{args.out_prefix}_meta.mem", [len(samples), len(words)], 16)
+    assert rle_decode(words) == samples, "rle_encode/decode mismatch in cmd_rle"
+    assert len(words) <= len(samples) + 1, "expansion bound violated"
+    print(f"scope_ref: {args.out_prefix}: {len(samples)} samples -> {len(words)} words "
+          f"(cnt_w={args.cnt_w})")
+
+
 def cmd_trigger_suite(args):
     cases = _trigger_cases(args.suite, args.probe_w)
     digits = (args.probe_w + 3) // 4
@@ -510,6 +600,17 @@ def main(argv):
     t.add_argument("--probe-w", type=int, required=True)
     t.add_argument("--out-prefix", required=True)
     t.set_defaults(func=cmd_trigger_suite)
+
+    r = sub.add_parser("rle", help="RLE encode vectors for tb_rle (+ built-in decode-identity)")
+    r.add_argument("--probe-w", type=int, required=True)
+    r.add_argument("--cnt-w", type=int, required=True, help="count-word field width (= DEPTH_LOG2)")
+    r.add_argument("--count", type=int, required=True, help="number of raw samples")
+    r.add_argument("--seed", type=lambda s: int(s, 0), default=0xC0FFEE09)
+    r.add_argument("--runs", type=int, default=0,
+                   help="if >0, bias toward runs (max dwell length); 0 = raw xorshift stream")
+    r.add_argument("--stim-in", default=None)
+    r.add_argument("--out-prefix", required=True)
+    r.set_defaults(func=cmd_rle)
 
     args = p.parse_args(argv)
     args.func(args)

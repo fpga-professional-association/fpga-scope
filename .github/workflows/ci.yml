@@ -43,3 +43,6 @@ jobs:
 
       - name: Check scope_top property (d) — drain/FIFO discipline
         run: cd formal && sby -f scope_top.sby
+
+      - name: Check scope_rle property (c) — RLE expansion bound
+        run: cd formal && sby -f scope_rle.sby

@@ -178,3 +178,46 @@ header); apply the same math per slice with `trig_index_rel = trig_index - slice
 - `tb_prim_fifo_async` soaks ≥110k scoreboarded transfers per leg at 3:1, 1:3, and ~1:1
   drifting-phase clock ratios, with directed fill-to-full/drain-to-empty and flag-exactness
   checks. A fault-injection run (broken full detection) was verified to trip the scoreboard.
+
+## RLE encoder (issue #9)
+
+`rtl/scope_rle.sv` is an optional run-length encoder on the capture sample stream, between the
+trigger's aligned probe sample and `scope_core`. It transforms a raw sample stream (one sample
+per `in_valid` cycle, never back-pressured) into a stream of `{is_count, value}` words of width
+`PROBE_W+1`, emitting **at most one word per cycle**.
+
+**Word format.** `word[PROBE_W]` = `is_count`; `word[PROBE_W-1:0]` = value.
+- data word (`is_count=0`): a sample that differs from its predecessor (or the first sample).
+- count word (`is_count=1`): "the current data value repeated N more times", N in
+  `1..2^CNT_W-1` (`CNT_W = DEPTH_LOG2`); a run longer than that emits successive count words
+  (the value is unchanged, so no repeated data word).
+
+```
+raw:   A A A A A B B                  (max_run=3)
+words: (0,A) (1,3) (1,1) (0,B) (1,1)
+       data  cnt=3 cnt=1 data  cnt=1
+```
+
+**One word per cycle — the 1-deep skid.** A value change with a pending run count must emit two
+words in one cycle (flush the old run's count, then the new data word). That is the only 2-word
+case; it requires `acc>0`, and it resets `acc=0`. A subsequent 2-word case needs intervening
+repeat cycles, which produce zero words and drain the skid. So the skid never needs more than
+one slot — proven by BMC (property (c)): output word count ≤ input sample count + 1 (the single
+in-flight skid word), `formal/scope_rle.sby`. `tb_rle` is the complementary exhaustive evidence
+(RTL word stream compared byte-for-byte against the `scope_ref.py` golden encoder over
+compressible / near-worst-case / wide streams; bypass equivalence checked too).
+
+**Trigger flush.** A between-samples `flush` pulse emits any pending count so the current run
+ends on a clean word boundary. It is used at the trigger instant and at window DONE so the
+trigger sample is cleanly represented and the raw-index bookkeeping stays exact.
+
+**Raw-count vs word-count semantics (planned scope_top integration).** When RLE is enabled
+`scope_core` stores *words* and its FSM counts *words*; the trigger index and DRAIN header index
+refer to the **raw sample count**, maintained in parallel and latched at the trigger instant
+(never the RLE word index — the classic bug). Post-trigger capture stops on whichever comes
+first: the raw post-budget (`DEPTH−PRETRIG` raw samples, via a gated `scope_core` hook) or the
+window slice filling with words; the DRAIN header reports both the raw counts and the word count,
+and sets `rle_flag=1` so the host decodes (raw domain) before applying the §host-reconstruction
+reorder math. The `scope_rle` encoder and its golden model (this commit) are the foundation;
+the width-threading of the store path (`scope_core`/`scope_csr`/`scope_drain` at `PROBE_W+1`)
+and the raw-index sideband are the remaining integration.

@@ -74,6 +74,16 @@ gen_vectors() {
   python3 "$SIM/model/scope_ref.py" drain-data --probe-w 32 \
     --buf-in "$BUILD/vectors/drn_buf.mem" \
     --out-prefix "$BUILD/vectors/drn" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+
+  # issue #9: RLE encode vectors (samples + expected words) for tb_rle. --runs biases toward
+  # runs (compressible); --runs 0 is the near-worst-case mostly-changing stream. cmd_rle also
+  # runs the decode-identity + expansion-bound self-test on every invocation.
+  python3 "$SIM/model/scope_ref.py" rle --probe-w 8 --cnt-w 8 --count 400 --runs 20 \
+    --seed 0xC0FFEE09 --out-prefix "$BUILD/vectors/rle_c8" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" rle --probe-w 8 --cnt-w 8 --count 400 --runs 0 \
+    --seed 0xBADC0DE1 --out-prefix "$BUILD/vectors/rle_t8" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
+  python3 "$SIM/model/scope_ref.py" rle --probe-w 32 --cnt-w 10 --count 300 --runs 6 \
+    --seed 0x51261234 --out-prefix "$BUILD/vectors/rle_w32" || { echo "TB_RESULT: FAIL (scope_ref.py)"; exit 1; }
 }
 
 # Source order: package first (scope_pkg, issue #4), then rtl/prim primitives (issue #3),
@@ -91,6 +101,7 @@ COMMON_SRCS=(
   "$RTL/scope_core.sv"
   "$RTL/scope_csr.sv"
   "$RTL/scope_trigger.sv"
+  "$RTL/scope_rle.sv"
   "$RTL/scope_drain.sv"
   "$RTL/xport/scope_uart.sv"
   "$RTL/scope_top.sv"
@@ -152,6 +163,7 @@ run_one tb_windows.sv         tb_windows          # issue #7: window slicing, me
 run_one tb_drain_cdc.sv       tb_drain_cdc        # issue #8: scope_top over byte stream, xclk!=clk, NAK/resync
 run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LSB-first + BE-CRC asserts first
 run_one tb_csr_if.sv          tb_csr_if           # issue #11: CSR matrix + BUF_DATA pop via Avalon-MM & AXI-Lite
+run_one tb_rle.sv             tb_rle              # issue #9: RLE encoder word stream vs model, bypass, expansion bound
 
 # scope_top elaboration matrix (issue #8): PROBE_W {8, 512} x XPORT {UART, STREAM} beyond
 # the fully-tested TB configs — lint-only builds, same -Wall flags.
