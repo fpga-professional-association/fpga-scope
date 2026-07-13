@@ -17,10 +17,16 @@
 //   * trig_ext_i pulses at armed-relative sample `trig_sample` (plusarg), so the model's
 //     `--trig-sample <trig_sample>` reproduces trig_index/wrapped exactly.
 //
-// Plusargs:  +seed=<hex32>   +trig_sample=<dec>
+// RLE_EN (build param, set via verilator -GRLE_EN=1'b1) elaborates the scope_rle store path;
+// the host enables runtime compression by writing RLE_CTRL and decodes in the word domain.
+//
+// Plusargs:  +seed=<hex32>   +trig_sample=<dec>   +dwell=<dec>   (dwell>1 holds each generated
+// value for `dwell` cycles -> runs, so RLE emits count words)
 `timescale 1ns / 1ps
 
-module tb_cosim;
+module tb_cosim #(
+    parameter bit RLE_EN = 1'b0
+);
 
   localparam int unsigned PROBE_W    = 32;
   localparam int unsigned DEPTH_LOG2 = 8;
@@ -33,10 +39,14 @@ module tb_cosim;
   // -- plusargs ----------------------------------------------------------------------------
   logic [31:0] seed = 32'hC0FFEE01;
   int unsigned trig_sample = 300;
+  int unsigned dwell = 1;                 // hold each generated value this many cycles (runs)
   initial begin
     void'($value$plusargs("seed=%h", seed));
     void'($value$plusargs("trig_sample=%d", trig_sample));
-    $fwrite(32'h8000_0002, "[tb_cosim] seed=%08h trig_sample=%0d\n", seed, trig_sample);
+    void'($value$plusargs("dwell=%d", dwell));
+    if (dwell == 0) dwell = 1;
+    $fwrite(32'h8000_0002, "[tb_cosim] RLE_EN=%0d seed=%08h trig_sample=%0d dwell=%0d\n",
+            RLE_EN, seed, trig_sample, dwell);
   end
 
   // -- single free-running clock + reset ---------------------------------------------------
@@ -64,6 +74,7 @@ module tb_cosim;
   scope_top #(
       .PROBE_W   (PROBE_W),
       .DEPTH_LOG2(DEPTH_LOG2),
+      .RLE_EN    (RLE_EN),
       .XPORT     ("STREAM"),
       .ID_VALUE  (IDV)
   ) dut (
@@ -119,7 +130,7 @@ module tb_cosim;
       sidx       <= 0;
     end else if (armed_seen || armed) begin
       armed_seen <= 1'b1;
-      probe      <= gen_stim(seed, sidx);
+      probe      <= gen_stim(seed, sidx / dwell);   // dwell>1 -> runs (exercises RLE counts)
       trig_ext_i <= (sidx == trig_sample);
       sidx       <= sidx + 1;
     end else begin

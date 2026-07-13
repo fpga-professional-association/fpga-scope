@@ -26,7 +26,13 @@ pytestmark = pytest.mark.skipif(not cosim_util.have_verilator(),
 @pytest.fixture(scope="session")
 def cosim_binary(tmp_path_factory):
     mdir = tmp_path_factory.mktemp("cosim_build")
-    return cosim_util.build_cosim(mdir)
+    return cosim_util.build_cosim(mdir, rle_en=False)
+
+
+@pytest.fixture(scope="session")
+def cosim_binary_rle(tmp_path_factory):
+    mdir = tmp_path_factory.mktemp("cosim_build_rle")
+    return cosim_util.build_cosim(mdir, rle_en=True)
 
 
 def _expected(seed, pretrig, trig_sample):
@@ -97,3 +103,49 @@ def test_cosim_end_to_end(cosim_binary, tmp_path, seed, pretrig, trig_sample):
     import zipfile
     with zipfile.ZipFile(sr) as z:
         assert len(z.read("logic-1-1")) == DEPTH * (PROBE_W // 8)
+
+
+def _raw_func(seed, dwell, count):
+    """The raw sample stream scope_rle sees, indexed by capture-model sample index k: the
+    2-cycle idle prefix (probe = 0 before arm) then gen_stimulus held `dwell` cycles each —
+    exactly what tb_cosim drives as probe(sidx)=gen(seed, sidx//dwell), sample k <- probe(k-2)."""
+    gen = scope_ref.gen_stimulus(seed, count, PROBE_W)
+    return lambda k: 0 if k < 2 else gen[(k - 2) // dwell]
+
+
+# RLE co-sim (scope_top RLE_EN=1): the store path is {is_count,value} words; the host reorders
+# in the word domain then rle_decodes. dwell>1 makes runs so count words are exercised; the
+# rle_enable=0 leg is the runtime bypass (wide words, is_count=0). pretrig=0 so the reordered
+# window opens on the flushed trigger data word (no mid-run leading count).
+@pytest.mark.parametrize("seed,trig_sample,dwell,rle_on", [
+    (0xC0FFEE01, 300, 4, True),    # runs of 4 -> count words
+    (0x1234ABCD, 300, 7, True),    # longer runs
+    (0xBADC0DE9, 260, 1, True),    # dwell 1: all data words (worst case), trigger flush on change
+    (0x51261234, 300, 5, False),   # runtime bypass (RLE_EN build, rle_enable=0)
+])
+def test_cosim_rle_end_to_end(cosim_binary_rle, tmp_path, seed, trig_sample, dwell, rle_on):
+    raw = _raw_func(seed, dwell, trig_sample + 4 * DEPTH + 8)
+
+    stderr_log = tmp_path / "tb_cosim_rle.stderr"
+    with cosim_util.CosimTransport(cosim_binary_rle, seed, trig_sample, stderr_log, dwell) as t:
+        sc = Scope(t, probe_w=PROBE_W)
+
+        assert sc.ping().cmd == frame.OP_PING
+        sc.write_csr(C.WINDOWS, 1)
+        sc.write_csr(C.PRETRIG, 0)
+        sc.write_csr(C.RLE_CTRL, 1 if rle_on else 0)   # runtime compression enable
+        assert not sc.status()["cfg_err"]
+
+        sc.arm()
+        assert sc.wait_done(timeout=15.0), "RLE capture never reached DONE"
+        cap = sc.drain(pretrig_eff=0)
+
+    # the DRAIN header must advertise the word format (rle_flag=RLE_EN=1) so the host decoded
+    assert cap.rle
+    # decode == raw: the decoded window is a contiguous run of the known stimulus, trigger first
+    assert None not in cap.samples, "leading/undefined RLE sample leaked through decode"
+    assert len(cap.samples) >= DEPTH, "word buffer should decode to at least DEPTH raw samples"
+    assert cap.trig_pos == 0                      # pretrig=0 -> trigger is the first sample
+    assert cap.samples[0] == raw(trig_sample)     # reconstructed trigger == probe at trigger
+    for i, s in enumerate(cap.samples):
+        assert s == raw(trig_sample + i), f"raw sample {i} mismatch (dwell={dwell})"

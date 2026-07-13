@@ -7,7 +7,13 @@ from __future__ import annotations
 
 
 def rle_decode_words(words, probe_w: int):
-    """`words`: list of ints, each is_count in bit `probe_w`, value in bits [probe_w-1:0]."""
+    """`words`: list of ints, each is_count in bit `probe_w`, value in bits [probe_w-1:0].
+
+    A reordered RLE window can begin mid-run (its opening count word's data value lives in a
+    word outside the window — e.g. a word-domain PRETRIG slice that starts partway through a
+    run). Those leading repeats are unreconstructable, so a count word seen before any data
+    word is skipped rather than emitting undefined samples. A complete stream (which always
+    opens with a data word) is unaffected, so this matches scope_ref.rle_decode there."""
     mask = (1 << probe_w) - 1
     out = []
     cur = None
@@ -17,6 +23,6 @@ def rle_decode_words(words, probe_w: int):
         if is_count == 0:
             cur = val
             out.append(cur)
-        else:
+        elif cur is not None:
             out.extend([cur] * val)
     return out

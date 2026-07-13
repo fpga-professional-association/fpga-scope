@@ -61,11 +61,14 @@ def decode_drain(frames, probe_w: int, pretrig_eff: int = 0) -> Capture:
             stored.extend(_unpack_samples(f.payload, nb))
 
     if rle:
-        # RLE words are stored in buffer order; decode to raw, then reorder in the raw domain.
-        # (Word-domain reorder + decode is equivalent when the trigger is a clean word boundary;
-        # v1 decodes then treats trig at its raw position — see #9 integration notes.)
-        raw = rle_decode_words(stored, probe_w)
-        ordered, trig_pos = raw, min(trig_index, len(raw))
+        # RLE words are stored in circular buffer order. Reorder to chronological WORD order
+        # (the issue-#7 math in WORD units — PRETRIG is word-domain when RLE is on), then
+        # rle_decode. scope_rle flushes on the trigger so the trigger word is a clean data word
+        # at the reordered trigger position; the number of raw samples the words before it
+        # decode to is the trigger's raw index (#9 integration).
+        ordered_words, trig_word_pos = reorder_window(stored, trig_index, wrapped, pretrig_eff)
+        ordered = rle_decode_words(ordered_words, probe_w)
+        trig_pos = len(rle_decode_words(ordered_words[:trig_word_pos], probe_w))
     else:
         ordered, trig_pos = reorder_window(stored, trig_index, wrapped, pretrig_eff)
 

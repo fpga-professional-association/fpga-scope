@@ -39,14 +39,16 @@ def have_verilator() -> bool:
     return shutil.which("verilator") is not None
 
 
-def build_cosim(mdir: Path) -> Path:
-    """Verilate tb_cosim into an executable; return its path. Raises on build failure."""
+def build_cosim(mdir: Path, rle_en: bool = False) -> Path:
+    """Verilate tb_cosim into an executable; return its path. Raises on build failure.
+    rle_en=True elaborates the scope_rle store path (scope_top RLE_EN=1)."""
     mdir.mkdir(parents=True, exist_ok=True)
     binary = mdir / "tb_cosim"
     cmd = [
         "verilator", "--binary", "--timing", "-Wall", "--timescale", "1ns/1ps",
         f"-I{RTL}", f"-I{RTL / 'prim'}", f"-I{RTL / 'xport'}", f"-I{RTL / 'if'}",
         "--top-module", "tb_cosim", "--Mdir", str(mdir), "-o", "tb_cosim",
+        f"-GRLE_EN=1'b{1 if rle_en else 0}",
         *[str(s) for s in _SOURCES],
     ]
     log = mdir / "build.log"
@@ -64,13 +66,15 @@ class CosimTransport:
     host -> DUT via COSIM_RX_FD, DUT -> host via COSIM_TX_FD; both are pass_fds'd into the
     child at their inherited numbers and named through the environment (see sim/cosim_io.cpp).
     """
-    def __init__(self, binary: Path, seed: int, trig_sample: int, stderr_path: Path | None = None):
+    def __init__(self, binary: Path, seed: int, trig_sample: int, stderr_path: Path | None = None,
+                 dwell: int = 1):
         self.h2d_r, self.h2d_w = os.pipe()   # parent writes h2d_w; DUT reads h2d_r
         self.d2h_r, self.d2h_w = os.pipe()   # DUT writes d2h_w; parent reads d2h_r
         env = dict(os.environ, COSIM_RX_FD=str(self.h2d_r), COSIM_TX_FD=str(self.d2h_w))
         self._stderr = open(stderr_path, "w") if stderr_path else subprocess.DEVNULL
         self.proc = subprocess.Popen(
-            [str(binary), f"+seed={seed & 0xFFFFFFFF:08x}", f"+trig_sample={trig_sample}"],
+            [str(binary), f"+seed={seed & 0xFFFFFFFF:08x}", f"+trig_sample={trig_sample}",
+             f"+dwell={dwell}"],
             env=env, pass_fds=(self.h2d_r, self.d2h_w),
             stdout=subprocess.DEVNULL, stderr=self._stderr)
         os.close(self.h2d_r)   # child owns these ends now

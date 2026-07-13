@@ -57,7 +57,7 @@ probe ─►(opt scope_rle)─►[scope_core: DEPTH×(PROBE_W+TS?) simple-dual-p
 |---|---|---|
 | 1 | `prim_ram_1r1w` read-during-write returns **old data**; the whole design assumes it | `sim/tb_prim_ram.sv` (issue #3) |
 | 2 | Trigger latency is 1 registered cycle | `docs/INTERFACES.md`, trigger TBs (issue #6) |
-| 3 | Trigger index refers to the **raw sample count**, carried sideband through RLE | `sim/tb_rle.sv` (issue #9) |
+| 3 | Under RLE, `trig_index`/`PRETRIG` are **word-domain**; the encoder flushes on the trigger so the host reorders words then `rle_decode`s (no raw-index sideband) | `host/tests/test_cosim.py` (issue #9) |
 | 4 | Timestamps are captured in the probe domain and drained through the same FIFO as data | drain TBs (issue #8) |
 | 5 | UART is LSB-first; CRC16-CCITT is big-endian on the wire | first two assertions of `sim/tb_uart.sv` (issue #8) |
 
@@ -207,17 +207,36 @@ in-flight skid word), `formal/scope_rle.sby`. `tb_rle` is the complementary exha
 (RTL word stream compared byte-for-byte against the `scope_ref.py` golden encoder over
 compressible / near-worst-case / wide streams; bypass equivalence checked too).
 
-**Trigger flush.** A between-samples `flush` pulse emits any pending count so the current run
-ends on a clean word boundary. It is used at the trigger instant and at window DONE so the
-trigger sample is cleanly represented and the raw-index bookkeeping stays exact.
+**Trigger flush (`trig_in`/`trig_out`).** The trigger's raw sample arrives on `trig_in` (sampled
+when `in_valid`). `scope_rle` FORCES a clean data word for that sample — flushing any pending
+count first — even when the sample repeats its predecessor, so the trigger instant is always a
+data-word boundary. A `trig_out` tag rides that data word through the skid, so `scope_core`'s
+`trig && sample_valid` lands exactly on the stored trigger word; its decoded value is the raw
+trigger sample. (The separate between-samples `flush` input remains for a future window-DONE
+flush; scope_top ties it 0 — see the stop semantics below.) Forcing a data word never expands
+past the +1 bound (still ≤ 1 word/cycle via the skid) and always decodes back to the raw stream.
 
-**Raw-count vs word-count semantics (planned scope_top integration).** When RLE is enabled
-`scope_core` stores *words* and its FSM counts *words*; the trigger index and DRAIN header index
-refer to the **raw sample count**, maintained in parallel and latched at the trigger instant
-(never the RLE word index — the classic bug). Post-trigger capture stops on whichever comes
-first: the raw post-budget (`DEPTH−PRETRIG` raw samples, via a gated `scope_core` hook) or the
-window slice filling with words; the DRAIN header reports both the raw counts and the word count,
-and sets `rle_flag=1` so the host decodes (raw domain) before applying the §host-reconstruction
-reorder math. The `scope_rle` encoder and its golden model (this commit) are the foundation;
-the width-threading of the store path (`scope_core`/`scope_csr`/`scope_drain` at `PROBE_W+1`)
-and the raw-index sideband are the remaining integration.
+**scope_top integration (word-domain, issue #9).** With `RLE_EN=1`, `scope_top` sets
+`STORE_W = PROBE_W+1` and threads it through `scope_core`/`scope_csr`/`scope_drain` (the CSR
+`BUF_DATA` lane window and the drain's per-sample byte packing widen to `STORE_W`; `PROBE_W`
+still drives the comparators and `HWCFG`). `scope_core` stores **words**, its FSM counts
+**words**, and `trig_index`/`wrapped`/`PRETRIG` are all **word-domain**. One insight removes the
+raw-index sideband the earlier plan assumed: because the encoder **flushes on the trigger**, the
+trigger word sits at the same reordered position a non-RLE trigger word would, so the host
+
+1. reorders the *word* buffer chronologically with the existing §host-reconstruction math
+   (word units), then
+2. `rle_decode`s the reordered words to the raw stream.
+
+`rle_decode` of the trigger-and-later words yields the raw trigger sample at the reconstructed
+trigger position — no raw-sample counter needed for correctness. `rle_flag` in the DRAIN header
+is the **elaboration-time `RLE_EN`** (the stored words are `STORE_W`-wide `{is_count,value}`),
+which tells the host to unpack `STORE_W` and `rle_decode`; runtime `RLE_CTRL[0]` only gates
+*compression* (a bypassed build still stores `is_count=0` words that decode to the raw stream).
+**PRETRIG is word-domain when RLE is on**, and post-trigger capture stops on the slice filling
+with words (a highly-compressible post-trigger signal simply fills more slowly — a documented,
+sanctioned deviation from raw-post-budget counting). A reordered window that opens mid-run (its
+leading count word's data value lies outside the window) drops those unreconstructable leading
+repeats. End-to-end evidence: `host/tests/test_cosim.py` drives the real `scope_top` (RLE_EN=1)
+over the co-sim pipe and asserts `decode == raw` with correct trigger reconstruction across
+run-length / worst-case / runtime-bypass streams.

@@ -38,7 +38,8 @@
 //     make a window slice smaller than 2 samples) are rejected and set cfg_err (issue #7).
 //   * Reserved/unmapped addresses read 0; writes to them are ignored (no cfg_err).
 module scope_csr #(
-    parameter int unsigned PROBE_W    = 32,   // 1..512
+    parameter int unsigned PROBE_W    = 32,   // 1..512 (user probe width: comparators, HWCFG)
+    parameter int unsigned STORE_W    = PROBE_W,  // stored-word width (= PROBE_W+1 when RLE_EN)
     parameter int unsigned DEPTH_LOG2 = 8,    // 8..15
     parameter int unsigned NUM_CMP    = 4,    // fixed 4 in v1 (CMP_SEL[1:0])
     parameter int unsigned SEQ_STAGES = 4,    // fixed 4 in v1
@@ -72,9 +73,9 @@ module scope_csr #(
     input  logic [TS_W-1:0]            ts,
     input  logic [TS_W-1:0]            ts_at_trig,
 
-    // capture-buffer drain (scope_core read port, same clock)
+    // capture-buffer drain (scope_core read port, same clock; STORE_W-wide words when RLE on)
     output logic [DEPTH_LOG2-1:0]      buf_rd_addr,
-    input  logic [PROBE_W-1:0]         buf_rd_data,
+    input  logic [STORE_W-1:0]         buf_rd_data,
 
     // per-window metadata (scope_core sideband table; WIN_SEL/WIN_META, issue #8 addendum)
     output logic [7:0]                 win_rd_addr,
@@ -94,6 +95,10 @@ module scope_csr #(
 
   localparam int unsigned LANES = (PROBE_W + 31) / 32;
   localparam int unsigned PAD_W = LANES * 32;  // lane-padded comparator storage width
+  // The buffer-drain lane window is sized to the STORED word width (PROBE_W+1 under RLE), which
+  // may need one more 32-bit lane than the comparators — the BUF_DATA CSR read spans BUF_LANES.
+  localparam int unsigned BUF_LANES = (STORE_W + 31) / 32;
+  localparam int unsigned BUF_PAD_W = BUF_LANES * 32;
 
   // ---- decode ---------------------------------------------------------------------------
   wire wr_ctrl = csr_write && (csr_addr == 8'(scope_pkg::CSR_CTRL));
@@ -201,7 +206,7 @@ module scope_csr #(
   assign force_trig = force_pend;
 
   // ---- buffer drain pointer -------------------------------------------------------------------
-  localparam int unsigned LANE_CNT_W = (LANES > 1) ? $clog2(LANES) : 1;
+  localparam int unsigned LANE_CNT_W = (BUF_LANES > 1) ? $clog2(BUF_LANES) : 1;
   logic [DEPTH_LOG2-1:0] drain_addr;
   logic [LANE_CNT_W-1:0] drain_lane;
   wire pop = csr_read && (csr_addr == 8'(scope_pkg::CSR_BUF_DATA));
@@ -211,7 +216,7 @@ module scope_csr #(
       drain_addr <= '0;
       drain_lane <= '0;
     end else if (pop) begin
-      if (drain_lane == LANE_CNT_W'(LANES - 1)) begin
+      if (drain_lane == LANE_CNT_W'(BUF_LANES - 1)) begin
         drain_lane <= '0;
         drain_addr <= drain_addr + 1'b1;
       end else begin
@@ -221,8 +226,8 @@ module scope_csr #(
   end
   assign buf_rd_addr = drain_addr;
 
-  // lane-padded view of the RAM output register (bits beyond PROBE_W read 0)
-  wire [PAD_W-1:0] buf_ext = PAD_W'(buf_rd_data);
+  // lane-padded view of the RAM output register (bits beyond STORE_W read 0)
+  wire [BUF_PAD_W-1:0] buf_ext = BUF_PAD_W'(buf_rd_data);
 
   // ---- WIN_SEL selector (plain register, writable in any state — it only selects which
   //      window the RO WIN_META view shows; the metadata RAM read has 1-cycle latency, so

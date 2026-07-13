@@ -29,10 +29,14 @@ module tb_rle_leg #(
   logic [PROBE_W-1:0] in_data;
   logic [PROBE_W:0]   word;
   logic               word_valid;
+  logic               unused_trig_out;
 
+  // trig_in tied 0 here: this TB verifies the pure encoder word stream vs scope_ref; the
+  // trigger-flush path is exercised end-to-end through scope_top by tb_cosim / host co-sim.
   scope_rle #(.PROBE_W(PROBE_W), .CNT_W(CNT_W)) dut (
       .clk(clk), .rst(rst), .enable(enable), .in_data(in_data),
-      .in_valid(in_valid), .flush(flush), .word(word), .word_valid(word_valid));
+      .in_valid(in_valid), .flush(flush), .trig_in(1'b0),
+      .word(word), .word_valid(word_valid), .trig_out(unused_trig_out));
 
   // vectors
   logic [PROBE_W-1:0] samples [0:MAXN-1];

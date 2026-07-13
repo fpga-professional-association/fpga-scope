@@ -165,19 +165,22 @@ run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LS
 run_one tb_csr_if.sv          tb_csr_if           # issue #11: CSR matrix + BUF_DATA pop via Avalon-MM & AXI-Lite
 run_one tb_rle.sv             tb_rle              # issue #9: RLE encoder word stream vs model, bypass, expansion bound
 
-# scope_top elaboration matrix (issue #8): PROBE_W {8, 512} x XPORT {UART, STREAM} beyond
-# the fully-tested TB configs — lint-only builds, same -Wall flags.
+# scope_top elaboration matrix (issue #8/#9): PROBE_W {8, 512} x XPORT {UART, STREAM} x
+# RLE_EN {0, 1} beyond the fully-tested TB configs — lint-only builds, same -Wall flags.
+# RLE_EN=1 elaborates the scope_rle stage + STORE_W=PROBE_W+1 store path (issue #9).
 for pw in 8 512; do
   for xp in UART STREAM; do
-    echo "== Lint matrix: scope_top PROBE_W=$pw XPORT=$xp"
-    if ! verilator --lint-only --timing -Wall --timescale 1ns/1ps \
-          -I"$RTL" -I"$RTL/if" -I"$RTL/xport" -I"$RTL/prim" \
-          --top-module scope_top -GPROBE_W="$pw" -GXPORT="\"$xp\"" \
-          ${COMMON_SRCS[@]+"${COMMON_SRCS[@]}"} > "$BUILD/lint_${pw}_${xp}.log" 2>&1; then
-      cat "$BUILD/lint_${pw}_${xp}.log"
-      echo "TB_RESULT: FAIL (lint matrix PROBE_W=$pw XPORT=$xp)"
-      overall=1
-    fi
+    for rle in 0 1; do
+      echo "== Lint matrix: scope_top PROBE_W=$pw XPORT=$xp RLE_EN=$rle"
+      if ! verilator --lint-only --timing -Wall --timescale 1ns/1ps \
+            -I"$RTL" -I"$RTL/if" -I"$RTL/xport" -I"$RTL/prim" \
+            --top-module scope_top -GPROBE_W="$pw" -GXPORT="\"$xp\"" -GRLE_EN="1'b$rle" \
+            ${COMMON_SRCS[@]+"${COMMON_SRCS[@]}"} > "$BUILD/lint_${pw}_${xp}_r${rle}.log" 2>&1; then
+        cat "$BUILD/lint_${pw}_${xp}_r${rle}.log"
+        echo "TB_RESULT: FAIL (lint matrix PROBE_W=$pw XPORT=$xp RLE_EN=$rle)"
+        overall=1
+      fi
+    done
   done
 done
 

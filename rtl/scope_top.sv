@@ -12,8 +12,12 @@
 //                                                     [scope_uart | raw stream | (CSR mode)]
 //
 // Policy decisions:
-//   * The RLE stage is a BYPASS STUB until issue #9: sample path = trigger's aligned
-//     sample_o, sample_valid tied 1 (sampling every probe clk, PLAN.md §6.1).
+//   * RLE stage (issue #9): with RLE_EN the trigger's aligned sample_o is run-length-encoded
+//     by scope_rle into STORE_W=PROBE_W+1 {is_count,value} words; the core/csr/drain store and
+//     drain WORDS, the trigger is re-aligned onto its (flushed) trigger word, and the host
+//     reorders in the word domain then rle_decodes (rle_flag=1 in the DRAIN header). With
+//     RLE_EN=0 the path is sample_o at PROBE_W, sample_valid tied 1 (PLAN.md §6.1) — the
+//     datapath is byte-identical to the pre-#9 design (STORE_W==PROBE_W).
 //   * Exactly ONE CDC (tracker rule 7): the cmd/rsp async-FIFO pair. It stays even when
 //     xclk == clk (no bypass in v1 — correctness over area). The capture/write path never
 //     sees transport back-pressure (tracker rule 1): the servicer only ever performs CSR
@@ -77,6 +81,10 @@ module scope_top #(
 
   // ------------------------------ capture domain --------------------------------------
 
+  // Stored-word width: with RLE the core/csr/drain store {is_count,value} words (PROBE_W+1);
+  // without RLE it is the raw probe width (datapath byte-identical to the pre-#9 design).
+  localparam int unsigned STORE_W = RLE_EN ? (PROBE_W + 1) : PROBE_W;
+
   // native CSR bus (master = servicer, or ext_csr_* in CSR mode)
   logic [7:0] csr_addr;
   logic [31:0] csr_wdata;
@@ -93,7 +101,7 @@ module scope_top #(
   logic [DEPTH_LOG2-1:0] trig_index;
   logic [TS_W-1:0] ts, ts_at_trig;
   logic [DEPTH_LOG2-1:0] buf_rd_addr;
-  logic [PROBE_W-1:0] buf_rd_data;
+  logic [STORE_W-1:0] buf_rd_data;
   logic [7:0] win_rd_addr;
   logic [DEPTH_LOG2:0] win_rd_data;
   logic [NUM_CMP*PROBE_W-1:0] cmp_mask, cmp_value, cmp_edge_mask, cmp_edge_pol;
@@ -127,14 +135,45 @@ module scope_top #(
       .cmp_hit      (unused_cmp_hit)
   );
 
-  // RLE bypass stub (issue #9 replaces this with scope_rle + bypass mux). RLE_EN is
-  // reported in HWCFG via scope_csr; rle_enable has no datapath effect yet.
-  wire [PROBE_W-1:0] sample_data = sample_o;
-  wire sample_valid = 1'b1;
-  wire unused_rle = &{1'b0, rle_enable, RLE_EN};
+  // ---- optional RLE stage (issue #9) --------------------------------------------------
+  // RLE_EN=1: scope_rle run-length-encodes the aligned sample stream into STORE_W
+  // {is_count,value} words and re-aligns the trigger onto the trigger word; the core, CSR
+  // and drain all run at STORE_W and the host reorders in the word domain then rle_decodes.
+  // RLE_EN=0: pure passthrough at PROBE_W (byte-identical to the pre-#9 datapath).
+  logic [STORE_W-1:0] sample_data;
+  logic               sample_valid;
+  logic               core_trig;
+
+  if (RLE_EN) begin : g_rle
+    logic [PROBE_W:0] rle_word;
+    logic             rle_word_valid, rle_trig_out;
+    scope_rle #(
+        .PROBE_W(PROBE_W),
+        .CNT_W  (DEPTH_LOG2)
+    ) u_rle (
+        .clk       (clk),
+        .rst       (rst),
+        .enable    (rle_enable),   // RLE_CTRL[0]: 0 => bypass (still STORE_W words, is_count=0)
+        .in_data   (sample_o),
+        .in_valid  (1'b1),         // sample every probe clock (PLAN.md §6.1)
+        .flush     (1'b0),         // no window-DONE flush: capture stops on slice-full-of-words
+        .trig_in   (trig),
+        .word      (rle_word),
+        .word_valid(rle_word_valid),
+        .trig_out  (rle_trig_out)
+    );
+    assign sample_data  = rle_word;
+    assign sample_valid = rle_word_valid;
+    assign core_trig    = rle_trig_out;
+  end else begin : g_norle
+    assign sample_data  = sample_o;
+    assign sample_valid = 1'b1;
+    assign core_trig    = trig;
+    wire unused_rle = &{1'b0, rle_enable};
+  end
 
   scope_core #(
-      .PROBE_W   (PROBE_W),
+      .PROBE_W   (STORE_W),        // stores RLE words when RLE_EN, else raw probe samples
       .DEPTH_LOG2(DEPTH_LOG2),
       .TS_W      (TS_W)
   ) u_core (
@@ -142,7 +181,7 @@ module scope_top #(
       .rst         (rst),
       .sample_data (sample_data),
       .sample_valid(sample_valid),
-      .trig        (trig),
+      .trig        (core_trig),
       .arm         (arm),
       .disarm      (disarm),
       .pretrig     (pretrig),
@@ -163,6 +202,7 @@ module scope_top #(
 
   scope_csr #(
       .PROBE_W   (PROBE_W),
+      .STORE_W   (STORE_W),
       .DEPTH_LOG2(DEPTH_LOG2),
       .NUM_CMP   (NUM_CMP),
       .SEQ_STAGES(SEQ_STAGES),
@@ -311,8 +351,9 @@ module scope_top #(
     logic drx_valid, drx_ready, dtx_valid, dtx_ready;
 
     scope_drain #(
-        .PROBE_W   (PROBE_W),
+        .STORE_W   (STORE_W),
         .DEPTH_LOG2(DEPTH_LOG2),
+        .RLE_EN    (RLE_EN),
         .ID_VALUE  (ID_VALUE)
     ) u_drain (
         .xclk     (xclk),

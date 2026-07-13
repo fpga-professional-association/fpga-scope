@@ -29,8 +29,9 @@
 // was popped — that is what makes the FIFOs unoverflowable (formal (d)).
 // Half-duplex: rx_ready is low while executing/responding (command/response protocol).
 module scope_drain #(
-    parameter int unsigned PROBE_W    = 32,
+    parameter int unsigned STORE_W    = 32,     // stored-word width (= PROBE_W, or PROBE_W+1 RLE)
     parameter int unsigned DEPTH_LOG2 = 8,
+    parameter bit          RLE_EN     = 1'b0,    // stored words are {is_count,value} -> rle_flag=1
     parameter logic [31:0] ID_VALUE   = 32'h0
 ) (
     input  logic        xclk,
@@ -56,8 +57,8 @@ module scope_drain #(
 );
 
   localparam int unsigned DEPTH = 1 << DEPTH_LOG2;
-  localparam int unsigned LANES = (PROBE_W + 31) / 32;
-  localparam int unsigned NB = (PROBE_W + 7) / 8;   // bytes per sample on the wire
+  localparam int unsigned LANES = (STORE_W + 31) / 32;  // 32-bit BUF_DATA reads per stored word
+  localparam int unsigned NB = (STORE_W + 7) / 8;   // bytes per stored word on the wire
   localparam int unsigned SPF = (DEPTH < 256) ? DEPTH : 256;  // samples per data frame
   localparam int unsigned CHUNKS = DEPTH / SPF;
 
@@ -140,8 +141,10 @@ module scope_drain #(
 
   // architecturally unused slices (32-bit CSR responses carry narrower fields; crc_hold
   // only needs its low byte — the high byte is emitted straight from crc_tx)
+  // rle_q (RLE_CTRL readback) is architecturally unused now that the header flag is the
+  // elaboration-time RLE_EN, not the runtime rle_enable bit — kept read for FSM symmetry.
   wire unused_slices = &{1'b0, crc_hold[15:8], status_q[31:16], status_q[7:5], status_q[3:0],
-                         ti_q[31:16], tsh_q[31:16], rle_q[31:1]};
+                         ti_q[31:16], tsh_q[31:16], rle_q};
 
   always_ff @(posedge xclk) begin
     if (xrst) begin
@@ -344,7 +347,11 @@ module scope_drain #(
 
         // ------------------------------ DRAIN: header payload --------------------------
         D_FLAGS: begin
-          emit_q <= {6'h0, status_q[4], rle_q[0]};  // bit1 wrapped, bit0 rle
+          // bit1 wrapped, bit0 rle. rle_flag = RLE_EN (elaboration): the stored words are
+          // STORE_W-wide {is_count,value} whenever the build carries the extra bit, so the host
+          // unpacks STORE_W and rle_decodes — correct even when runtime rle_enable=0 (all
+          // is_count=0 words decode to the raw stream). rle_q (RLE_CTRL) only gates compression.
+          emit_q <= {6'h0, status_q[4], RLE_EN};
           crc_en_q <= 1'b1; ret_e <= D_WD; st <= EMIT;
         end
         D_WD: begin emit_q <= w_done; crc_en_q <= 1'b1; ret_e <= D_TIH; st <= EMIT; end

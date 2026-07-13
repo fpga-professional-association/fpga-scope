@@ -305,15 +305,22 @@ tag parameter).
 
 | Header payload bytes | Content |
 |---|---|
-| 0 | flags: bit0 = rle (RLE_CTRL[0]), bit1 = wrapped (last window), rest 0 |
+| 0 | flags: bit0 = rle (= elaboration `RLE_EN`), bit1 = wrapped (last window), rest 0 |
 | 1 | windows_done |
 | 2–3 | trig_index (BE, most recent window, absolute buffer address) |
 | 4–9 | ts_at_trig (48-bit BE) |
 | 10 .. 10+2W−1 | per window w < windows_done: `{wrapped, trig_index[14:0]}` (2, BE) |
 
-Data frame payload: `chunk_index(2,BE)` then `SPF` samples in **raw buffer order** (the
-host reorders per DESIGN.md), each sample packed **little-endian** (bits [7:0] first) into
-`ceil(PROBE_W/8)` bytes.
+Data frame payload: `chunk_index(2,BE)` then `SPF` stored words in **raw buffer order** (the
+host reorders per DESIGN.md), each word packed **little-endian** (bits [7:0] first) into
+`ceil(STORE_W/8)` bytes — `STORE_W = PROBE_W` normally, `PROBE_W+1` when `RLE_EN=1` (issue #9).
+
+**`rle` flag (issue #9):** set to the **elaboration-time `RLE_EN`**, not the runtime
+`RLE_CTRL[0]`. It means "the stored words are `STORE_W`-wide `{is_count,value}`" — so the host
+unpacks `ceil(STORE_W/8)` bytes, **reorders in the word domain**, then `rle_decode`s to raw
+samples (`trig_index`/`PRETRIG` are word-domain under RLE). This is correct even when runtime
+compression is off: a bypassed `RLE_EN=1` build still stores `is_count=0` words that decode to
+the raw stream. `RLE_CTRL[0]` gates only whether count words (compression) are produced.
 
 **Transport binding (`XPORT`)**: `"UART"` = scope_uart on `uart_rx/uart_tx` (8N1, mid-bit
 sampling, framing-error bytes dropped); `"STREAM"` = raw `rx_*/tx_*` valid/ready byte
