@@ -46,3 +46,19 @@ jobs:
 
       - name: Check scope_rle property (c) — RLE expansion bound
         run: cd formal && sby -f scope_rle.sby
+
+  # Python host package (issue #10): unit tests + codec cross-check against the SV golden model.
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install + test
+        run: |
+          python -m pip install -e host
+          python -m pip install pytest
+          python -m pytest host/tests -q
