@@ -35,12 +35,13 @@ for pw in $PWS; do
     rm -rf "$HERE/output_files" "$HERE/db" "$HERE/incremental_db" "$HERE/qdb"
     QPRO quartus_sh --flow compile scope_util -c scope_util > "$HERE/sweep_$tag.log" 2>&1
     rpt="$HERE/output_files/scope_util.fit.rpt"
-    alm=$(grep -m1 "ALMs needed" "$rpt" 2>/dev/null | grep -oE "[0-9,]+\.[0-9]" | head -1)
-    m20k=$(grep -m1 "; M20Ks  *;" "$rpt" 2>/dev/null | grep -oE "[0-9]+ / [0-9]+" | head -1)
+    cp -f "$rpt" "$HERE/fit_$tag.rpt" 2>/dev/null   # keep each config's report (output_files is wiped next)
+    alm=$(grep -m1 "Logic utilization (in ALMs)" "$rpt" 2>/dev/null | grep -oE "[0-9,]+ / [0-9,]+ \( *[0-9]+ %" | head -1)
+    m20k=$(grep -m1 "Total RAM Blocks" "$rpt" 2>/dev/null | grep -oE "[0-9]+ / [0-9]+ \( *[0-9]+ %" | head -1)
     store_w=$(( pw + 1 ))            # RLE_EN=1
     bufbits=$(( (1 << dl) * store_w ))
     echo "| $pw | $dl | $store_w | ${alm:-?} | ${m20k:-?} | $bufbits |" >> "$OUT"
-    echo "  -> ALMs=${alm:-?} M20K=${m20k:-?} bufbits=$bufbits"
+    echo "  -> ALMs=[${alm:-?}] M20K=[${m20k:-?}] bufbits=$bufbits"
   done
 done
 echo "wrote $OUT"
