@@ -5,8 +5,9 @@ import argparse
 import sys
 
 from . import csr as C
-from .scope import Scope
+from .scope import Scope, save_capture, load_capture
 from .vcd import write_vcd
+from .sigrok import write_sr
 from .probes import load_probes
 
 
@@ -43,20 +44,27 @@ def _cmd_arm(args):
         if not sc.wait_done(args.timeout):
             sys.exit("timeout waiting for DONE")
         cap = sc.drain(pretrig_eff=args.pretrig or 0)
+        if args.save:
+            save_capture(cap, args.save)
+            print(f"saved capture -> {args.save}")
         _export(cap, args)
 
 
 def _cmd_export(args):
-    # export a previously-downloaded raw buffer file is out of scope for v1; arm --wait exports live
-    sys.exit("use `arm --wait --out capture.vcd`; standalone export lands with the co-sim path")
+    cap = load_capture(args.infile)
+    _export(cap, args)
 
 
 def _export(cap, args):
     probes = load_probes(args.probes, cap.probe_w)
-    if args.out:
+    if getattr(args, "out", None):
         write_vcd(args.out, cap.samples, cap.probe_w, probes=probes,
                   timescale=args.timescale, trig_pos=cap.trig_pos)
         print(f"wrote {args.out}: {len(cap.samples)} samples, trigger at {cap.trig_pos}")
+    if getattr(args, "sr", None):
+        write_sr(args.sr, cap.samples, cap.probe_w, probes=probes,
+                 samplerate=args.samplerate)
+        print(f"wrote {args.sr}: {len(cap.samples)} samples ({cap.probe_w} channels)")
 
 
 def main(argv=None):
@@ -80,13 +88,20 @@ def main(argv=None):
     a.add_argument("--timeout", type=float, default=5.0)
     a.add_argument("--pretrig", type=int)
     a.add_argument("--out", help="write VCD to this path")
+    a.add_argument("--sr", help="write sigrok .sr to this path")
+    a.add_argument("--save", help="persist the raw decoded capture (JSON) for later export")
     a.add_argument("--probes", help="probes.json bit-lane names")
     a.add_argument("--timescale", default="1ns")
+    a.add_argument("--samplerate", type=int, default=1_000_000, help="probe clock rate (Hz) for .sr")
     a.set_defaults(func=_cmd_arm)
 
-    e = sub.add_parser("export")
+    e = sub.add_parser("export", help="re-export a saved capture (--save JSON) to VCD/sigrok")
     e.add_argument("infile")
-    e.add_argument("--sr")
+    e.add_argument("--out", help="write VCD to this path")
+    e.add_argument("--sr", help="write sigrok .sr to this path")
+    e.add_argument("--probes", help="probes.json bit-lane names")
+    e.add_argument("--timescale", default="1ns")
+    e.add_argument("--samplerate", type=int, default=1_000_000)
     e.set_defaults(func=_cmd_export)
 
     args = p.parse_args(argv)

@@ -24,6 +24,13 @@ fpgapa-scope --port /dev/ttyUSB0 config --pretrig 256 --windows 1
 # arm, wait for the trigger, download, and write a VCD with named signals
 fpgapa-scope --port /dev/ttyUSB0 --probe-w 32 arm --wait \
     --out capture.vcd --probes probes.json
+
+# arm and export straight to sigrok (+ save the raw decoded capture for later re-export)
+fpgapa-scope --port /dev/ttyUSB0 --probe-w 32 arm --wait \
+    --sr capture.sr --save capture.json --samplerate 48000000
+
+# re-export a saved capture to another format without re-capturing
+fpgapa-scope export capture.json --out capture.vcd --sr capture.sr --probes probes.json
 ```
 
 `probes.json` maps probe bit lanes to names (`[msb, lsb]`, inclusive); unmapped bits export as
@@ -51,7 +58,12 @@ write_vcd("out.vcd", cap.samples, cap.probe_w, trig_pos=cap.trig_pos)
 - **reorder** — the DESIGN.md issue-#7 worked examples + an end-to-end DRAIN decode placing the trigger sample correctly.
 - **RLE decode** — matches `scope_ref.rle_decode` across widths.
 - **VCD** — round-trips named + bus signals + the trigger marker through a minimal VCD reader.
+- **sigrok `.sr`** — ZIP container structure, `metadata` fields, channel naming, and a byte-exact round-trip of the raw `logic-1-1` payload (libsigrok srzip v2 format).
+- **Verilator co-sim** (`test_cosim.py`, auto-skips without verilator) — builds the **real `scope_top`** (`XPORT="STREAM"`) into a binary whose stdin/stdout-isolated pipe fds carry the byte stream, then the host drives it end-to-end: **ping → identify → configure → arm → (TB-internal seeded stimulus) → wait → drain → decode**. The drained buffer, `trig_index`, `wrapped`, and the reordered window are asserted **byte-for-byte against `scope_ref.capture_model` for the same seed**, across pretrig 0/64 and wrapped/non-wrapped cases. This is the design doc's "pytest green against Verilator co-sim" gate.
 
-**Remaining for full #10 acceptance:** the sigrok `.sr` writer, and the Verilator co-simulation
-that drives the real `scope_top` (XPORT="STREAM") over a pipe end-to-end (ping → config → arm →
-stimulate → download → VCD vs `scope_ref`). GTKWave/PulseView load-checks are a manual one-time step.
+### Tool load-checks (manual, one-time)
+
+The VCD and `.sr` writers are structurally validated in CI; opening them in a GUI is a manual
+step (those tools aren't in CI). Last verified:
+- **VCD** → GTKWave / Surfer: _pending a manual open_ (writer follows IEEE 1364 §18).
+- **sigrok `.sr`** → PulseView: _pending a manual open_ (writer follows libsigrok `srzip` v2).

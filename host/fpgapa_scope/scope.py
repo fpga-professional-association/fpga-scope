@@ -74,6 +74,26 @@ def decode_drain(frames, probe_w: int, pretrig_eff: int = 0) -> Capture:
                    raw_buffer=stored)
 
 
+def save_capture(cap: Capture, path):
+    """Persist a decoded Capture as JSON (samples are hex to stay compact for wide probes)."""
+    import json
+    with open(path, "w") as f:
+        json.dump({"probe_w": cap.probe_w, "trig_pos": cap.trig_pos, "trig_index": cap.trig_index,
+                   "wrapped": cap.wrapped, "windows_done": cap.windows_done,
+                   "ts_at_trig": cap.ts_at_trig, "rle": cap.rle,
+                   "samples": [f"{s:x}" for s in cap.samples]}, f)
+
+
+def load_capture(path) -> Capture:
+    """Inverse of save_capture."""
+    import json
+    with open(path) as f:
+        d = json.load(f)
+    return Capture(samples=[int(s, 16) for s in d["samples"]], probe_w=d["probe_w"],
+                   trig_pos=d["trig_pos"], trig_index=d["trig_index"], wrapped=d["wrapped"],
+                   windows_done=d["windows_done"], ts_at_trig=d["ts_at_trig"], rle=d["rle"])
+
+
 class BytesTransport:
     """In-memory loopback transport for tests: `feed()` queues bytes the host will `read()`."""
     def __init__(self):
@@ -144,13 +164,18 @@ class Scope:
                 return True
         return False
 
-    def drain(self, pretrig_eff: int = 0) -> Capture:
+    def drain(self, pretrig_eff: int = 0, timeout: float = 5.0, quiet: float = 0.03) -> Capture:
+        """Request a DRAIN and read frames until the stream goes idle for `quiet` seconds (the
+        end of the burst) or `timeout` elapses — transport-agnostic (UART, co-sim pipe, …)."""
         self._send(frame.OP_DRAIN)
-        # collect frames until a full DRAIN header + its data chunks arrive
         buf = bytearray()
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + timeout
+        last_rx = time.monotonic()
         while time.monotonic() < deadline:
-            chunk = self.t.read(256)
+            chunk = self.t.read(4096)
             if chunk:
                 buf += chunk
+                last_rx = time.monotonic()
+            elif buf and (time.monotonic() - last_rx) > quiet:
+                break
         return decode_drain(frame.parse_all(bytes(buf)), self.probe_w, pretrig_eff)

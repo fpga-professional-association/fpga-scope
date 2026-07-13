@@ -47,12 +47,19 @@ jobs:
       - name: Check scope_rle property (c) — RLE expansion bound
         run: cd formal && sby -f scope_rle.sby
 
-  # Python host package (issue #10): unit tests + codec cross-check against the SV golden model.
+  # Python host package (issue #10): unit tests + codec cross-check against the SV golden model,
+  # and a Verilator co-simulation driving the REAL scope_top over a byte pipe (test_cosim.py).
+  # Verilator here matches the sim job's toolchain so the co-sim build succeeds in-job.
   host:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Install Verilator + toolchain (for the co-sim)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator build-essential
+          verilator --version
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
