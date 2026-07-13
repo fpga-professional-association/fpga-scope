@@ -58,17 +58,17 @@ open core that works on every FPGA and every flow, including the ones that have 
 Mature vendor GUIs lead on convenience and a few capabilities fpga-scope defers to v2. These are
 filed as enhancement issues so the gap is explicit, not hidden:
 
-- **Post-synth net tapping** — insert by net name without editing RTL (SignalTap node finder,
-  Vivado `MARK_DEBUG`). fpga-scope v1 requires wiring `probe` in RTL.
-- **JTAG transport** — the vendors drain over the JTAG cable you already have; fpga-scope v1 is
-  UART/CSR (this is the single most-requested parity item, especially with a USB-Blaster on hand).
-- **Storage qualification** — store only cycles that meet a condition (deep effective capture on
-  bursty buses); fpga-scope v1 offers RLE but not conditional storage.
-- **Advanced trigger state machine** — Vivado's trigger-FSM language / SignalTap state-based
-  triggering are richer than fpga-scope's 4-stage sequencer.
-- **Multiple independent probe groups**, **live streaming**, and **decimation** — deferred to v1.1/v2.
+- **JTAG transport** ([#15](https://github.com/fpga-professional-association/fpga-scope/issues/15)) —
+  the vendors drain over the JTAG cable you already have; fpga-scope v1 is UART/CSR (the single
+  most-requested parity item, especially with a USB-Blaster on hand).
+- **Post-synth net tapping** ([#16](https://github.com/fpga-professional-association/fpga-scope/issues/16)) —
+  insert by net name without editing RTL (SignalTap node finder, Vivado `MARK_DEBUG`).
+- **Storage qualification** ([#17](https://github.com/fpga-professional-association/fpga-scope/issues/17)) —
+  store only cycles that meet a condition; fpga-scope v1 offers RLE but not conditional storage.
+- **Advanced trigger state machine** ([#18](https://github.com/fpga-professional-association/fpga-scope/issues/18)) —
+  Vivado's trigger-FSM language / SignalTap state-based triggering are richer than the 4-stage sequencer.
+- **Multiple independent probe groups** ([#19](https://github.com/fpga-professional-association/fpga-scope/issues/19)),
+  **decimation** ([#20](https://github.com/fpga-professional-association/fpga-scope/issues/20)), and
+  **live streaming** ([#21](https://github.com/fpga-professional-association/fpga-scope/issues/21)) — deferred to v1.1/v2.
 - **Integrated GUI setup + waveform** — the vendor tools bundle capture setup and a viewer;
   fpga-scope uses a CLI + external open-source viewers by design.
-
-See the [issue tracker](https://github.com/fpga-professional-association/fpga-scope/issues) for
-the enhancement issues covering each gap.
