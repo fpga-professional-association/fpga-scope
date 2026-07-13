@@ -25,15 +25,17 @@ Tracker: [issue #1](https://github.com/fpga-professional-association/fpga-scope/
 | M3 | Trigger engine: comparators + combine + sequencer | [#6](https://github.com/fpga-professional-association/fpga-scope/issues/6) | done |
 | M4 | Pre-trigger + capture windows | [#7](https://github.com/fpga-professional-association/fpga-scope/issues/7) | done |
 | M5 | Drain + CDC + UART + `scope_top` assembly | [#8](https://github.com/fpga-professional-association/fpga-scope/issues/8) | done |
-| M6 | RLE encoder (`scope_rle` + model + formal) | [#9](https://github.com/fpga-professional-association/fpga-scope/issues/9) | encoder done; `scope_top` integration open |
-| M7 | Python host (`fpgapa-scope`): frame codec, VCD/sigrok export | [#10](https://github.com/fpga-professional-association/fpga-scope/issues/10) | open |
+| M6 | RLE encoder + `scope_top` integration (word-domain, co-sim) | [#9](https://github.com/fpga-professional-association/fpga-scope/issues/9) | done |
+| M7 | Python host (`fpgapa-scope`): frame codec, VCD/sigrok, Verilator co-sim | [#10](https://github.com/fpga-professional-association/fpga-scope/issues/10) | done |
 | M8 | Bus front-ends: Avalon-MM + AXI4-Lite | [#11](https://github.com/fpga-professional-association/fpga-scope/issues/11) | done |
-| M9 | AXC3000 board demo: scope watching hyperram bring-up | [#12](https://github.com/fpga-professional-association/fpga-scope/issues/12) | open (hardware ready) |
+| M9 | AXC3000 board demo: scope watching hyperram bring-up | [#12](https://github.com/fpga-professional-association/fpga-scope/issues/12) | done (real capture) |
 | v1.0 | Acceptance: random-config soak, 3 Mbaud drain, dual-instance | [#13](https://github.com/fpga-professional-association/fpga-scope/issues/13) | open |
 
-8 of 13 milestone issues closed. The core RTL — capture, CSR, trigger, pre-trigger + windows,
-drain/CDC/UART + `scope_top`, RLE encoder, and the Avalon-MM/AXI4-Lite front-ends — is done,
-`-Wall` clean, with all four SBY formal properties proving in CI.
+11 of 13 milestone issues closed. The full RTL — capture, CSR, trigger, pre-trigger + windows,
+drain/CDC/UART + `scope_top`, RLE encoder **and its word-domain store-path integration**, and the
+Avalon-MM/AXI4-Lite front-ends — is done, `-Wall` clean, with all four SBY formal properties
+proving in CI, a Python host verified against a **Verilator co-simulation of the real RTL**, and a
+**real-silicon capture** on the AXC3000 (below).
 
 ## Features
 
@@ -62,13 +64,20 @@ including Yosys+nextpnr, which has no ILA at all**, drains without a JTAG cable 
 bus), and writes open waveform formats. Full capability matrix, honestly marked (✅ shipped /
 🟡 partial / 🔜 planned), and the gaps where the vendor GUIs still lead: **[docs/COMPARISON.md](docs/COMPARISON.md)**.
 
-## Hardware bring-up (M9)
+## Hardware bring-up (M9) — done
 
-The board demo targets the **Arrow AXC3000** (Agilex 3 `A3CY100BM16AE7S`) over a **USB Blaster III**,
-reusing the [hyperram](https://github.com/fpga-professional-association/hyperram) repo's proven
-flow: build in the `alterafpga/quartus-pro:26.1-agilex3` container, program with `quartus_pgm`,
-and drive the CSR/UART readout from `system-console` (or straight UART) — all under the shared
-`/tmp/axc3000-devkit.lock`. See [issue #12](https://github.com/fpga-professional-association/fpga-scope/issues/12).
+An fpga-scope instance runs on the **Arrow AXC3000** (Agilex 3 `A3CY100BM16AE7S`), instrumenting a
+**real HyperRAM controller** ([hyperram](https://github.com/fpga-professional-association/hyperram))
+as a third JTAG-Avalon slave (`XPORT="CSR"`, zero extra pins). It triggered on a live HyperBus
+`cs_n` falling edge and captured the transaction — `cs_n` toggling, `ck_en` gating, `dq_oe` through
+the CA/write phases, and the controller FSM stepping through 10 states. Build + program + capture
+walkthrough: **[fpga/axc3000/README.md](fpga/axc3000/README.md)**; the captured waveforms are in
+[docs/captures/](docs/captures/) (`axc3000_hyperram_cs.vcd` + a focused view + sigrok `.sr`).
+
+Utilization (demo config PROBE_W=32, DEPTH_LOG2=12, RLE_EN=1, Agilex 3, timing-clean at 175 MHz):
+**4,388 ALMs (13%)**, **15 M20K (6%)** — of which the scope's 4096×33 capture buffer is exactly
+**8 M20K = 135,168 bits**, the raw BRAM cost with no bloat. Scripted PROBE_W×DEPTH_LOG2 sweep:
+[fpga/util_sweep/](fpga/util_sweep/).
 
 ## Verify
 
