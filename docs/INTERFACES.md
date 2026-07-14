@@ -182,6 +182,7 @@ Timing rules (frozen):
 | 9 | `TRIG_INDEX` | RO | buffer address of the trigger sample (zero-extended) |
 | 10 | `TSTRIG_LO` | RO | `ts_at_trig[31:0]` — timestamp of the trigger sample |
 | 11 | `TSTRIG_HI` | RO | `ts_at_trig[47:32]` (zero-extended; no shadow needed, value is static after capture) |
+| 14 | `SMPL_CTRL` | RW (0) | decimation + storage qualification (#17/#20 addendum): `[23:0]` DECIM — store 1 sample every `DECIM+1` probe clocks (0=every cycle); `[24]` QUAL_EN — store only qualified cycles; `[26:25]` QUAL_SEL — comparator (0..3) whose per-cycle hit qualifies storage. A trigger firing between store ticks is held until the next stored sample. Config-locked. |
 | 15 | `CMP_SEL` | RW (0) | `[1:0]` comparator k (0..3), `[3:2]` field: 0=MASK, 1=VALUE, 2=EDGE_MASK, 3=EDGE_POL |
 | 16..31 | `CMP_LANE[0..15]` | RW (0) | lane window of the field selected by `CMP_SEL`: word 16+j = probe bits `[32j+31:32j]`. Lanes ≥ L read 0 / drop writes; bits ≥ `PROBE_W` in the top lane read 0 |
 | 64 | `TRIG_COMBINE` | RW (0) | stage n in bits `[8n+7:8n]`: `[3:0]` comparator select mask, `[4]` 1=AND of selected / 0=OR of selected, `[7:5]` reserved-as-0 |
@@ -191,7 +192,7 @@ Timing rules (frozen):
 
 Behavioral rules (frozen):
 - **cfg_err lockout** (PLAN.md §6.4): any `csr_write` to the config address set
-  {`PRETRIG`, `WINDOWS`, `RLE_CTRL`, `CMP_SEL`, `CMP_LANE[*]`, `TRIG_COMBINE`, `SEQ_CNT*`}
+  {`PRETRIG`, `WINDOWS`, `RLE_CTRL`, `SMPL_CTRL`, `CMP_SEL`, `CMP_LANE[*]`, `TRIG_COMBINE`, `SEQ_CNT*`}
   while `STATUS.state != IDLE` is **ignored** and sets sticky `STATUS.cfg_err`. `cfg_err`
   clears **only on soft_rst** (accepted-write clearing would hide earlier errors).
 - **force_trig** (PLAN.md §6.5): CTRL bit2 latches a pending force when strobed in

@@ -67,14 +67,14 @@ class CosimTransport:
     child at their inherited numbers and named through the environment (see sim/cosim_io.cpp).
     """
     def __init__(self, binary: Path, seed: int, trig_sample: int, stderr_path: Path | None = None,
-                 dwell: int = 1):
+                 dwell: int = 1, probe_mode: int = 0):
         self.h2d_r, self.h2d_w = os.pipe()   # parent writes h2d_w; DUT reads h2d_r
         self.d2h_r, self.d2h_w = os.pipe()   # DUT writes d2h_w; parent reads d2h_r
         env = dict(os.environ, COSIM_RX_FD=str(self.h2d_r), COSIM_TX_FD=str(self.d2h_w))
         self._stderr = open(stderr_path, "w") if stderr_path else subprocess.DEVNULL
         self.proc = subprocess.Popen(
             [str(binary), f"+seed={seed & 0xFFFFFFFF:08x}", f"+trig_sample={trig_sample}",
-             f"+dwell={dwell}"],
+             f"+dwell={dwell}", f"+probe_mode={probe_mode}"],
             env=env, pass_fds=(self.h2d_r, self.d2h_w),
             stdout=subprocess.DEVNULL, stderr=self._stderr)
         os.close(self.h2d_r)   # child owns these ends now

@@ -215,6 +215,11 @@ module tb_windows
       .pretrig      (unused_csr_pretrig),
       .windows      (csr_windows),
       .rle_enable   (unused_csr_rle),
+      /* verilator lint_off PINCONNECTEMPTY */  // SMPL_CTRL outputs (#17/#20) unused in this TB
+      .decim        (),
+      .qual_en      (),
+      .qual_sel     (),
+      /* verilator lint_on PINCONNECTEMPTY */
       .state        (3'(SCOPE_ST_IDLE)),
       .triggered    (1'b0),
       .wrapped      (1'b0),

@@ -63,6 +63,9 @@ module scope_csr #(
     output logic [DEPTH_LOG2-1:0]      pretrig,
     output logic [7:0]                 windows,
     output logic                       rle_enable,
+    output logic [23:0]                decim,       // SMPL_CTRL[23:0]: store 1 / (decim+1) cycles
+    output logic                       qual_en,     // SMPL_CTRL[24]: storage qualification enable
+    output logic [1:0]                 qual_sel,    // SMPL_CTRL[26:25]: qualifier comparator
 
     // status from scope_core
     input  logic [2:0]                 state,
@@ -109,6 +112,7 @@ module scope_csr #(
                      (csr_addr < 8'(scope_pkg::CSR_SEQ_CNT_BASE + SEQ_STAGES));
   wire is_cfg_addr = (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) || (csr_addr == 8'(scope_pkg::CSR_WINDOWS)) ||
                      (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) || (csr_addr == 8'(scope_pkg::CSR_CMP_SEL)) ||
+                     (csr_addr == 8'(scope_pkg::CSR_SMPL_CTRL)) ||
                      is_lane_addr || (csr_addr == 8'(scope_pkg::CSR_TRIG_COMBINE)) || is_seq_addr;
   wire cfg_locked = (state != 3'(scope_pkg::SCOPE_ST_IDLE));
   wire cfg_wr_ok = csr_write && is_cfg_addr && !cfg_locked;
@@ -128,6 +132,7 @@ module scope_csr #(
   logic [31:0] trig_combine_q;
   logic [31:0] seq_cnt_q[SEQ_STAGES];
   logic        rle_enable_q;
+  logic [31:0] smpl_ctrl_q;   // decimation + storage qualification (#17/#20)
   logic [DEPTH_LOG2-1:0] pretrig_q;
   logic [7:0]  windows_q;
 
@@ -151,6 +156,7 @@ module scope_csr #(
       pretrig_q      <= '0;
       windows_q      <= 8'd1;
       rle_enable_q   <= 1'b0;
+      smpl_ctrl_q    <= 32'h0;
       cmp_sel_q      <= 4'h0;
       for (int unsigned f = 0; f < 4; f++)
         for (int unsigned k = 0; k < NUM_CMP; k++) cmp_q[f][k] <= '0;
@@ -160,6 +166,7 @@ module scope_csr #(
       if (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) pretrig_q <= csr_wdata[DEPTH_LOG2-1:0];
       if (csr_addr == 8'(scope_pkg::CSR_WINDOWS) && !windows_bad) windows_q <= windows_wval;
       if (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) rle_enable_q <= csr_wdata[0];
+      if (csr_addr == 8'(scope_pkg::CSR_SMPL_CTRL)) smpl_ctrl_q <= csr_wdata;
       if (csr_addr == 8'(scope_pkg::CSR_CMP_SEL)) cmp_sel_q <= csr_wdata[3:0];
       if (is_lane_addr && (32 * 32'(lane_idx) < PROBE_W))
         cmp_q[cmp_sel_q[3:2]][cmp_sel_q[1:0]][32*lane_idx+:32] <= csr_wdata & lane_wmask(
@@ -172,6 +179,9 @@ module scope_csr #(
   assign pretrig      = pretrig_q;
   assign windows      = windows_q;
   assign rle_enable   = rle_enable_q;
+  assign decim        = smpl_ctrl_q[23:0];
+  assign qual_en      = smpl_ctrl_q[24];
+  assign qual_sel     = smpl_ctrl_q[26:25];
   assign trig_combine = trig_combine_q;
 
   for (genvar k = 0; k < 32'(NUM_CMP); k++) begin : g_cmp_out
@@ -257,6 +267,7 @@ module scope_csr #(
     else if (csr_addr == 8'(scope_pkg::CSR_PRETRIG)) csr_rdata = 32'(pretrig_q);
     else if (csr_addr == 8'(scope_pkg::CSR_WINDOWS)) csr_rdata = 32'(windows_q);
     else if (csr_addr == 8'(scope_pkg::CSR_RLE_CTRL)) csr_rdata = {31'h0, rle_enable_q};
+    else if (csr_addr == 8'(scope_pkg::CSR_SMPL_CTRL)) csr_rdata = smpl_ctrl_q;
     else if (csr_addr == 8'(scope_pkg::CSR_TS_LO)) csr_rdata = ts[31:0];
     else if (csr_addr == 8'(scope_pkg::CSR_TS_HI)) csr_rdata = 32'(ts_hi_shadow);
     else if (csr_addr == 8'(scope_pkg::CSR_TRIG_INDEX)) csr_rdata = 32'(trig_index);

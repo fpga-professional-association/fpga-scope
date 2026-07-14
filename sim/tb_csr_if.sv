@@ -103,7 +103,11 @@ module tb_csr_if_leg
       .csr_addr(csr_addr), .csr_wdata(csr_wdata), .csr_write(csr_write),
       .csr_read(csr_read), .csr_rdata(csr_rdata),
       .arm(arm), .disarm(disarm), .force_trig(force_trig), .pretrig(pretrig),
-      .windows(windows), .rle_enable(rle_enable), .state(state), .triggered(triggered),
+      .windows(windows), .rle_enable(rle_enable),
+      /* verilator lint_off PINCONNECTEMPTY */
+      .decim(), .qual_en(), .qual_sel(),        // SMPL_CTRL outputs (#17/#20) unused in this TB
+      /* verilator lint_on PINCONNECTEMPTY */
+      .state(state), .triggered(triggered),
       .wrapped(wrapped), .windows_done(windows_done), .trig_index(trig_index),
       .ts(ts), .ts_at_trig(ts_at_trig), .buf_rd_addr(buf_rd_addr), .buf_rd_data(buf_rd_data),
       .win_rd_addr(win_rd_addr), .win_rd_data(win_rd_data),

@@ -95,6 +95,9 @@ module scope_top #(
   logic [DEPTH_LOG2-1:0] pretrig;
   logic [7:0] windows;
   logic rle_enable;
+  logic [23:0] decim;              // SMPL_CTRL (issue #17/#20)
+  logic qual_en;
+  logic [1:0] qual_sel;
   logic [2:0] state;
   logic wrapped, cfg_err;
   logic [7:0] windows_done;
@@ -110,7 +113,7 @@ module scope_top #(
 
   logic trig;
   logic [PROBE_W-1:0] sample_o;
-  logic [NUM_CMP-1:0] unused_cmp_hit;
+  logic [NUM_CMP-1:0] cmp_hit;
 
   scope_trigger #(
       .PROBE_W   (PROBE_W),
@@ -132,8 +135,37 @@ module scope_top #(
       .trig         (trig),
       .trig_ext_o   (trig_ext_o),
       .sample_o     (sample_o),
-      .cmp_hit      (unused_cmp_hit)
+      .cmp_hit      (cmp_hit)
   );
+
+  // ---- decimation + storage qualification (issue #17/#20) -----------------------------
+  // A per-cycle sample-enable gates what the capture path actually stores. Both knobs live in
+  // SMPL_CTRL (scope_csr) and default to 0 => sample_en high every cycle => byte-identical to
+  // the pre-feature datapath.
+  //   * decimation: store 1 sample every (decim+1) probe clocks (a downcounter tick).
+  //   * qualification: store only when the selected comparator matches. cmp_hit is registered
+  //     one stage before sample_o, so realign it by 1 cycle to gate the right sample.
+  //   * a trigger that fires between store ticks is HELD until the next one, so the trigger
+  //     always lands on a stored sample (on-grid in the decimated/qualified domain).
+  logic [NUM_CMP-1:0] cmp_hit_d1;
+  logic [23:0] dec_cnt;
+  logic trig_pend;
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      cmp_hit_d1 <= '0;
+      dec_cnt    <= 24'd0;
+      trig_pend  <= 1'b0;
+    end else begin
+      cmp_hit_d1 <= cmp_hit;
+      dec_cnt    <= (dec_cnt == 24'd0) ? decim : (dec_cnt - 24'd1);
+      if (sample_en)  trig_pend <= 1'b0;   // consumed on a store tick
+      else if (trig)  trig_pend <= 1'b1;   // held between ticks
+    end
+  end
+  wire dec_tick  = (dec_cnt == 24'd0);
+  wire qual_hit  = qual_en ? cmp_hit_d1[qual_sel] : 1'b1;
+  wire sample_en = dec_tick & qual_hit;
+  wire trig_fire = (trig | trig_pend) & sample_en;
 
   // ---- optional RLE stage (issue #9) --------------------------------------------------
   // RLE_EN=1: scope_rle run-length-encodes the aligned sample stream into STORE_W
@@ -155,9 +187,9 @@ module scope_top #(
         .rst       (rst),
         .enable    (rle_enable),   // RLE_CTRL[0]: 0 => bypass (still STORE_W words, is_count=0)
         .in_data   (sample_o),
-        .in_valid  (1'b1),         // sample every probe clock (PLAN.md §6.1)
+        .in_valid  (sample_en),    // decimation/qualification gate (SMPL_CTRL); 1 every cycle by default
         .flush     (1'b0),         // no window-DONE flush: capture stops on slice-full-of-words
-        .trig_in   (trig),
+        .trig_in   (trig_fire),
         .word      (rle_word),
         .word_valid(rle_word_valid),
         .trig_out  (rle_trig_out)
@@ -167,8 +199,8 @@ module scope_top #(
     assign core_trig    = rle_trig_out;
   end else begin : g_norle
     assign sample_data  = sample_o;
-    assign sample_valid = 1'b1;
-    assign core_trig    = trig;
+    assign sample_valid = sample_en;
+    assign core_trig    = trig_fire;
     wire unused_rle = &{1'b0, rle_enable};
   end
 
@@ -222,6 +254,9 @@ module scope_top #(
       .pretrig      (pretrig),
       .windows      (windows),
       .rle_enable   (rle_enable),
+      .decim        (decim),
+      .qual_en      (qual_en),
+      .qual_sel     (qual_sel),
       .state        (state),
       .triggered    (triggered),
       .wrapped      (wrapped),

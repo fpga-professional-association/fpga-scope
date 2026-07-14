@@ -98,6 +98,11 @@ module tb_csr_leg
       .pretrig      (pretrig),
       .windows      (windows),
       .rle_enable   (rle_enable),
+      /* verilator lint_off PINCONNECTEMPTY */  // SMPL_CTRL outputs (#17/#20) unused in this TB
+      .decim        (),
+      .qual_en      (),
+      .qual_sel     (),
+      /* verilator lint_on PINCONNECTEMPTY */
       .state        (state),
       .triggered    (triggered),
       .wrapped      (wrapped),

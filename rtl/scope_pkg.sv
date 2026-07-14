@@ -74,6 +74,9 @@ package scope_pkg;
   localparam int unsigned CSR_TSTRIG_HI      = 11;
   localparam int unsigned CSR_WIN_SEL        = 12;  // window selector for WIN_META (v1 #8 addendum)
   localparam int unsigned CSR_WIN_META       = 13;  // RO: {wrapped, trig_index} of selected window
+  localparam int unsigned CSR_SMPL_CTRL      = 14;  // decimation + storage qualification (#17/#20):
+                                                    //   [23:0] DECIM (store 1 / DECIM+1 cycles, 0=every)
+                                                    //   [24] QUAL_EN  [26:25] QUAL_SEL (comparator k)
   localparam int unsigned CSR_CMP_SEL        = 15;  // [1:0] comparator k, [3:2] field
   localparam int unsigned CSR_CMP_LANE_BASE  = 16;  // 16..31: lane window of selected field
   localparam int unsigned CSR_CMP_LANE_WORDS = 16;

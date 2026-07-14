@@ -40,13 +40,15 @@ module tb_cosim #(
   logic [31:0] seed = 32'hC0FFEE01;
   int unsigned trig_sample = 300;
   int unsigned dwell = 1;                 // hold each generated value this many cycles (runs)
+  int unsigned probe_mode = 0;            // 0 = xorshift stimulus; 1 = free-running counter probe
   initial begin
     void'($value$plusargs("seed=%h", seed));
     void'($value$plusargs("trig_sample=%d", trig_sample));
     void'($value$plusargs("dwell=%d", dwell));
+    void'($value$plusargs("probe_mode=%d", probe_mode));
     if (dwell == 0) dwell = 1;
-    $fwrite(32'h8000_0002, "[tb_cosim] RLE_EN=%0d seed=%08h trig_sample=%0d dwell=%0d\n",
-            RLE_EN, seed, trig_sample, dwell);
+    $fwrite(32'h8000_0002, "[tb_cosim] RLE_EN=%0d seed=%08h trig_sample=%0d dwell=%0d mode=%0d\n",
+            RLE_EN, seed, trig_sample, dwell, probe_mode);
   end
 
   // -- single free-running clock + reset ---------------------------------------------------
@@ -122,20 +124,31 @@ module tb_cosim #(
   // -- probe stimulus, aligned to the armed (FILLING) rise (capture domain) ----------------
   logic        armed_seen = 1'b0;
   int unsigned sidx = 0;
+  logic [31:0] free_cnt = 32'd0;          // free-running +1/clk counter probe (probe_mode=1)
   always_ff @(negedge clk) begin
     if (rst) begin
       probe      <= '0;
       trig_ext_i <= 1'b0;
       armed_seen <= 1'b0;
       sidx       <= 0;
-    end else if (armed_seen || armed) begin
-      armed_seen <= 1'b1;
-      probe      <= gen_stim(seed, sidx / dwell);   // dwell>1 -> runs (exercises RLE counts)
-      trig_ext_i <= (sidx == trig_sample);
-      sidx       <= sidx + 1;
+      free_cnt   <= 32'd0;
     end else begin
-      probe      <= '0;
-      trig_ext_i <= 1'b0;
+      free_cnt <= free_cnt + 1'b1;
+      if (probe_mode == 1) begin
+        // free-running counter: decimation/qualification tests want exact, phase-independent
+        // spacing between stored samples, so drive a clean +1/clk probe unconditionally.
+        probe      <= free_cnt;
+        trig_ext_i <= (armed_seen || armed) ? (sidx == trig_sample) : 1'b0;
+        if (armed_seen || armed) begin armed_seen <= 1'b1; sidx <= sidx + 1; end
+      end else if (armed_seen || armed) begin
+        armed_seen <= 1'b1;
+        probe      <= gen_stim(seed, sidx / dwell);   // dwell>1 -> runs (exercises RLE counts)
+        trig_ext_i <= (sidx == trig_sample);
+        sidx       <= sidx + 1;
+      end else begin
+        probe      <= '0;
+        trig_ext_i <= 1'b0;
+      end
     end
   end
 

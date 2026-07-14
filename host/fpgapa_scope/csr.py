@@ -22,6 +22,7 @@ TSTRIG_LO = 10
 TSTRIG_HI = 11
 WIN_SEL = 12
 WIN_META = 13
+SMPL_CTRL = 14     # [23:0] decimation (store 1/(N+1) cycles), [24] qual_en, [26:25] qual_sel (#17/#20)
 CMP_SEL = 15        # [1:0] comparator k, [3:2] field (0 mask,1 value,2 edge_mask,3 edge_pol)
 CMP_LANE_BASE = 16  # 16..31: lane window of the selected comparator field
 CMP_LANE_WORDS = 16
@@ -51,6 +52,12 @@ WINDOWS_DONE_SHIFT = 8
 
 STATE_IDLE, STATE_FILLING, STATE_ARMED, STATE_TRIGGERED, STATE_DONE = range(5)
 STATE_NAMES = {0: "IDLE", 1: "FILLING", 2: "ARMED", 3: "TRIGGERED", 4: "DONE"}
+
+
+def smpl_ctrl(decim: int = 0, qual_en: bool = False, qual_sel: int = 0) -> int:
+    """Pack the SMPL_CTRL word (word 14): decimation store-every-(decim+1) + storage qualification
+    on comparator `qual_sel`. decim=0, qual_en=False => sample every cycle, no qualification."""
+    return (decim & 0xFFFFFF) | ((1 if qual_en else 0) << 24) | ((qual_sel & 0x3) << 25)
 
 
 def decode_status(word: int) -> dict:

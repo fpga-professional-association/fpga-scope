@@ -105,6 +105,52 @@ def test_cosim_end_to_end(cosim_binary, tmp_path, seed, pretrig, trig_sample):
         assert len(z.read("logic-1-1")) == DEPTH * (PROBE_W // 8)
 
 
+# ---- decimation (#20) + storage qualification (#17) ---------------------------------------
+# Driven with a free-running counter probe (tb_cosim +probe_mode=1): the stored samples then have
+# an exact, phase-independent spacing, so the SMPL_CTRL gating is checked directly on the values.
+
+@pytest.mark.parametrize("decim", [1, 3, 7])
+def test_cosim_decimation(cosim_binary, tmp_path, decim):
+    with cosim_util.CosimTransport(cosim_binary, 0xC0FFEE01, 400,
+                                   tmp_path / "dec.stderr", dwell=1, probe_mode=1) as t:
+        sc = Scope(t, probe_w=PROBE_W)
+        sc.write_csr(C.WINDOWS, 1)
+        sc.write_csr(C.PRETRIG, 0)
+        sc.write_csr(C.SMPL_CTRL, C.smpl_ctrl(decim=decim))   # store 1 sample every (decim+1)
+        assert not sc.status()["cfg_err"]
+        sc.arm()
+        assert sc.wait_done(timeout=20.0), "decimated capture never reached DONE"
+        cap = sc.drain(pretrig_eff=0)
+
+    s = cap.samples
+    assert len(s) == DEPTH
+    steps = {(s[i + 1] - s[i]) & 0xFFFFFFFF for i in range(len(s) - 1)}
+    assert steps == {decim + 1}, f"decimation spacing {steps} != {{{decim + 1}}}"
+
+
+def test_cosim_storage_qualification(cosim_binary, tmp_path):
+    with cosim_util.CosimTransport(cosim_binary, 0x1234ABCD, 400,
+                                   tmp_path / "qual.stderr", dwell=1, probe_mode=1) as t:
+        sc = Scope(t, probe_w=PROBE_W)
+        sc.write_csr(C.WINDOWS, 1)
+        sc.write_csr(C.PRETRIG, 0)
+        # comparator 0 = level match probe[0]==1 (odd counter): MASK=1, VALUE=1, no edge.
+        sc.write_csr(C.CMP_SEL, (C.CMP_FIELD_MASK << 2) | 0);  sc.write_csr(C.CMP_LANE_BASE, 0x1)
+        sc.write_csr(C.CMP_SEL, (C.CMP_FIELD_VALUE << 2) | 0); sc.write_csr(C.CMP_LANE_BASE, 0x1)
+        sc.write_csr(C.TRIG_COMBINE, 0)     # comparator is the qualifier only; trigger is ext
+        sc.write_csr(C.SMPL_CTRL, C.smpl_ctrl(qual_en=True, qual_sel=0))
+        assert not sc.status()["cfg_err"]
+        sc.arm()
+        assert sc.wait_done(timeout=20.0), "qualified capture never reached DONE"
+        cap = sc.drain(pretrig_eff=0)
+
+    s = cap.samples
+    assert len(s) == DEPTH
+    assert all(v & 1 for v in s), "every stored sample must be odd (the qualifier condition)"
+    steps = {(s[i + 1] - s[i]) & 0xFFFFFFFF for i in range(len(s) - 1)}
+    assert steps == {2}, f"qualified spacing {steps} != {{2}} (consecutive odd counter values)"
+
+
 def _raw_func(seed, dwell, count):
     """The raw sample stream scope_rle sees, indexed by capture-model sample index k: the
     2-cycle idle prefix (probe = 0 before arm) then gen_stimulus held `dwell` cycles each —
