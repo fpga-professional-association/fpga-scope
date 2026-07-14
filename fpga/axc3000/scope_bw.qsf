@@ -63,6 +63,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/scope_rle.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/scope_drain.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/xport/scope_uart.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/scope_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/if/scope_jtag.sv
 
 # ---- scope-integrated top ----
 set_global_assignment -name SYSTEMVERILOG_FILE top_scope.sv

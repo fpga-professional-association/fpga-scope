@@ -107,8 +107,11 @@ module top_scope (
 
   // fpga-scope #12: a THIRD slave at the 0x400 window (m_address[10]) — 256 word registers
   // (scope CSR map, BUF_DATA at word 97). Decoded ahead of cap/bw so the windows stay disjoint.
-  wire              sel_scope      = m_address[10];   // 0x400 window = fpga-scope CSR
-  wire              sel_cap        = m_address[8] & ~sel_scope;  // 0x100 window = capture CSR
+  // fpga-scope #15: a FOURTH slave at the 0x800 window (m_address[11]) — the scope_jtag byte
+  // bridge (3 regs) for a SECOND scope that drains the framed protocol over JTAG.
+  wire              sel_jtag       = m_address[11];   // 0x800 window = scope_jtag byte bridge
+  wire              sel_scope      = m_address[10] & ~sel_jtag;   // 0x400 window = fpga-scope CSR
+  wire              sel_cap        = m_address[8] & ~sel_scope & ~sel_jtag;  // 0x100 = capture CSR
 
   // hyperram_bw_test CSR: 32 registers (0x00..0x7C) => 5 word-address bits = m_address[6:2]
   wire [CSR_AW-1:0] csr_address    = m_address[CSR_AW+1:2];
@@ -133,8 +136,16 @@ module top_scope (
   wire              scope_csr_write= m_write & sel_scope;
   wire [31:0]       scope_readdata;
 
-  wire [31:0] mux_readdata    = sel_scope ? scope_readdata : sel_cap ? cap_readdata    : csr_readdata;
-  wire        mux_waitrequest = sel_scope ? 1'b0           : sel_cap ? cap_waitrequest : csr_waitrequest;
+  // scope_jtag byte bridge (#15): TXDATA/RXDATA/STATUS = words 0/1/2 => m_address[3:2]
+  wire [7:0]        jtag_addr      = {6'h0, m_address[3:2]};
+  wire              jtag_read      = m_read  & sel_jtag;
+  wire              jtag_write     = m_write & sel_jtag;
+  wire [31:0]       jtag_readdata;
+
+  wire [31:0] mux_readdata    = sel_jtag ? jtag_readdata : sel_scope ? scope_readdata :
+                                sel_cap  ? cap_readdata  : csr_readdata;
+  wire        mux_waitrequest = sel_jtag ? 1'b0 : sel_scope ? 1'b0 :
+                                sel_cap  ? cap_waitrequest : csr_waitrequest;
 
   assign m_waitrequest = mux_waitrequest;   // tied low inside both slaves (0 wait states)
 
@@ -601,6 +612,35 @@ module top_scope (
       .ext_csr_write(scope_csr_write),
       .ext_csr_read (scope_csr_read),
       .ext_csr_rdata(scope_readdata)
+  );
+
+  // =========================================================================
+  // fpga-scope #15: a SECOND scope reachable over JTAG via the scope_jtag BYTE bridge (0x800).
+  // XPORT="STREAM" — the full framed protocol (PING/CSR/DRAIN, CRC, RLE) runs over JTAG and the
+  // unchanged Python decoder reads it. Same probes, a compact 256-deep buffer.
+  // =========================================================================
+  logic [7:0] jrx_data, jtx_data;
+  logic       jrx_valid, jrx_ready, jtx_valid, jtx_ready;
+
+  scope_jtag u_jtag (
+      .clk        (clk), .rst(sys_rst),
+      .address    (jtag_addr), .read(jtag_read), .readdata(jtag_readdata),
+      .write      (jtag_write), .writedata(m_writedata), .waitrequest(),
+      .rx_data    (jrx_data), .rx_valid(jrx_valid), .rx_ready(jrx_ready),
+      .tx_data    (jtx_data), .tx_valid(jtx_valid), .tx_ready(jtx_ready)
+  );
+
+  scope_top #(
+      .PROBE_W(32), .DEPTH_LOG2(8), .RLE_EN(1'b1), .XPORT("STREAM"), .ID_VALUE(32'hA3C3_0015)
+  ) u_scope_j (
+      .clk(clk), .rst(sys_rst), .probe(scope_probe_q),
+      .trig_ext_i(1'b0), .trig_ext_o(),
+      .xclk(clk), .xrst(sys_rst),
+      .rx_data(jrx_data), .rx_valid(jrx_valid), .rx_ready(jrx_ready),
+      .tx_data(jtx_data), .tx_valid(jtx_valid), .tx_ready(jtx_ready),
+      .uart_rx(1'b1), .uart_tx(), .armed(), .triggered(),
+      .ext_csr_addr(8'h0), .ext_csr_wdata(32'h0), .ext_csr_write(1'b0),
+      .ext_csr_read(1'b0), .ext_csr_rdata()
   );
 
 endmodule
