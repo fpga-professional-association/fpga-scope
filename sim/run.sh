@@ -108,6 +108,7 @@ COMMON_SRCS=(
   # -- CSR bus front-ends (issue #11):
   "$RTL/if/scope_avalon.sv"
   "$RTL/if/scope_axil.sv"
+  "$RTL/if/scope_jtag.sv"
   # -- sim models: none yet (golden refs are Python-generated .mem files, see gen_vectors)
 )
 
@@ -165,6 +166,7 @@ run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LS
 run_one tb_csr_if.sv          tb_csr_if           # issue #11: CSR matrix + BUF_DATA pop via Avalon-MM & AXI-Lite
 run_one tb_rle.sv             tb_rle              # issue #9: RLE encoder word stream vs model, bypass, expansion bound
 run_one tb_ext_trig.sv        tb_ext_trig         # issue #13: dual-instance cross-trigger (A cmp -> B trig_ext) + independence
+run_one tb_jtag.sv           tb_jtag             # issue #15: framed protocol over scope_jtag byte bridge, byte-exact == STREAM
 
 # scope_top elaboration matrix (issue #8/#9): PROBE_W {8, 512} x XPORT {UART, STREAM} x
 # RLE_EN {0, 1} beyond the fully-tested TB configs — lint-only builds, same -Wall flags.

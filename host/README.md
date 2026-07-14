@@ -31,7 +31,16 @@ fpgapa-scope --port /dev/ttyUSB0 --probe-w 32 arm --wait \
 
 # re-export a saved capture to another format without re-capturing
 fpgapa-scope export capture.json --out capture.vcd --sr capture.sr --probes probes.json
+
+# drain over JTAG (the scope_jtag byte bridge, #15) instead of UART — same frames, same decoder
+fpgapa-scope --jtag --jtag-base 0x400 --probe-w 32 arm --wait --out capture.vcd --probes probes.json
 ```
+
+**JTAG transport (`--jtag`, #15):** with an `rtl/if/scope_jtag` byte bridge on a JTAG-to-Avalon
+master, the whole framed protocol runs over the JTAG cable — the *same* codec, unchanged. The host
+drives a persistent `system-console` REPL (`fpga/axc3000/sysconsole/scope_jtag_repl.tcl`) that pumps
+bytes through the bridge's TXDATA/RXDATA/STATUS registers; `fpgapa_scope.jtag.JtagTransport` presents
+it as an ordinary byte transport. Hold `/tmp/axc3000-devkit.lock` around board access.
 
 `probes.json` maps probe bit lanes to names (`[msb, lsb]`, inclusive); unmapped bits export as
 `probe[k]`:

@@ -11,7 +11,10 @@ from .sigrok import write_sr
 from .probes import load_probes
 
 
-def _open_serial(args):
+def _open_transport(args):
+    if getattr(args, "jtag", False):
+        from .jtag import JtagTransport, docker_launch_cmd
+        return JtagTransport(launch_cmd=docker_launch_cmd(base=args.jtag_base))
     try:
         import serial  # pyserial (optional extra)
     except ImportError:
@@ -20,13 +23,13 @@ def _open_serial(args):
 
 
 def _cmd_ping(args):
-    sc = Scope(_open_serial(args), probe_w=args.probe_w)
+    sc = Scope(_open_transport(args), probe_w=args.probe_w)
     fr = sc.ping()
     print(f"PING -> {fr.name}, payload={fr.payload.hex()}")
 
 
 def _cmd_config(args):
-    sc = Scope(_open_serial(args), probe_w=args.probe_w)
+    sc = Scope(_open_transport(args), probe_w=args.probe_w)
     if args.pretrig is not None:
         sc.write_csr(C.PRETRIG, args.pretrig)
     if args.windows is not None:
@@ -36,7 +39,7 @@ def _cmd_config(args):
 
 
 def _cmd_arm(args):
-    sc = Scope(_open_serial(args), probe_w=args.probe_w)
+    sc = Scope(_open_transport(args), probe_w=args.probe_w)
     sc.arm()
     if args.force:
         sc.force_trig()
@@ -73,6 +76,10 @@ def main(argv=None):
     p.add_argument("--port", help="serial port (e.g. /dev/ttyUSB0)")
     p.add_argument("--baud", type=int, default=3_000_000)
     p.add_argument("--probe-w", type=int, default=32)
+    p.add_argument("--jtag", action="store_true",
+                   help="drain over JTAG via the scope_jtag bridge (system-console), not UART")
+    p.add_argument("--jtag-base", type=lambda s: int(s, 0), default=0x400,
+                   help="byte base of the scope_jtag register window on the JTAG-Avalon master")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("ping").set_defaults(func=_cmd_ping)

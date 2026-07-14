@@ -381,3 +381,24 @@ in `tb_csr`): RO-write rejection, R/W walk over every register class (PRETRIG/WI
 TRIG_COMBINE/SEQ_CNT/comparator lane window), CTRL strobe self-clear, cfg_err lockout, and the
 BUF_DATA pop-on-read sequence; the AXI-Lite leg additionally exercises AW-before-W, W-before-AW,
 simultaneous, and back-to-back reads.
+
+### #15 JTAG byte-stream bridge — `scope_jtag`
+
+`rtl/if/scope_jtag.sv` is a different kind of front-end: it exposes the **byte stream**
+(`XPORT="STREAM"` rx/tx) rather than the CSR bus, so the whole framed protocol (0xA5 0x5C … crc16,
+RLE captures and all) travels over JTAG and the **same host decoder works unchanged**. It maps to
+three word-addressed registers a JTAG-to-Avalon master pumps bytes through:
+
+| Word | Reg | Dir | Meaning |
+|---|---|---|---|
+| 0 | `TXDATA` | W | `[7:0]` a byte host→scope; accepted only when `STATUS.can_write=1` (1-deep buffer) |
+| 1 | `RXDATA` | R | `[8]` rx_avail, `[7:0]` byte scope→host; the READ pops the scope's tx (iff available) |
+| 2 | `STATUS` | R | `[1]` can_write (tx buffer empty), `[0]` rx_avail (a byte is waiting) |
+
+Half-duplex frame discipline (host writes a full request polling `can_write`, then reads the
+response polling `rx_avail`) means the 1-deep buffer never drops a byte; the JTAG read rate simply
+back-pressures the drain (`tx_ready` asserts only on a `RXDATA` read). `sim/tb_jtag.sv` runs
+PING/CSR/DRAIN through the bridge and checks the drained DRAIN_DATA frame **byte-exact** against the
+same `scope_ref.py` golden bytes `tb_drain_cdc` checks over the raw stream — so the bridge is proven
+transparent. Host: `fpgapa_scope.jtag.JtagTransport` (a `system-console` REPL byte-pump,
+`fpga/axc3000/sysconsole/scope_jtag_repl.tcl`) or `fpgapa-scope --jtag`.
