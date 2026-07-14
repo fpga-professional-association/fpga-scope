@@ -14,29 +14,6 @@ Interface contract: [docs/INTERFACES.md](docs/INTERFACES.md) ·
 Architecture: [docs/DESIGN.md](docs/DESIGN.md) ·
 Tracker: [issue #1](https://github.com/fpga-professional-association/fpga-scope/issues/1)
 
-## Status
-
-| Milestone | Content | Issue | Status |
-|---|---|---|---|
-| M0 | Repo bootstrap: skeleton, CI, sim harness, INTERFACES.md v0 | [#2](https://github.com/fpga-professional-association/fpga-scope/issues/2) | done |
-| M0 | Primitive library `rtl/prim/`: ff_sync, sync/async FIFOs, 1r1w RAM | [#3](https://github.com/fpga-professional-association/fpga-scope/issues/3) | done |
-| M1 | Capture core: `scope_pkg` + `scope_core` + golden ref | [#4](https://github.com/fpga-professional-association/fpga-scope/issues/4) | done |
-| M2 | CSR block + INTERFACES.md v1 freeze | [#5](https://github.com/fpga-professional-association/fpga-scope/issues/5) | done |
-| M3 | Trigger engine: comparators + combine + sequencer | [#6](https://github.com/fpga-professional-association/fpga-scope/issues/6) | done |
-| M4 | Pre-trigger + capture windows | [#7](https://github.com/fpga-professional-association/fpga-scope/issues/7) | done |
-| M5 | Drain + CDC + UART + `scope_top` assembly | [#8](https://github.com/fpga-professional-association/fpga-scope/issues/8) | done |
-| M6 | RLE encoder + `scope_top` integration (word-domain, co-sim) | [#9](https://github.com/fpga-professional-association/fpga-scope/issues/9) | done |
-| M7 | Python host (`fpgapa-scope`): frame codec, VCD/sigrok, Verilator co-sim | [#10](https://github.com/fpga-professional-association/fpga-scope/issues/10) | done |
-| M8 | Bus front-ends: Avalon-MM + AXI4-Lite | [#11](https://github.com/fpga-professional-association/fpga-scope/issues/11) | done |
-| M9 | AXC3000 board demo: scope watching hyperram bring-up | [#12](https://github.com/fpga-professional-association/fpga-scope/issues/12) | done (real capture) |
-| v1.0 | Acceptance: random-config soak, 3 Mbaud drain, dual-instance | [#13](https://github.com/fpga-professional-association/fpga-scope/issues/13) | open |
-
-11 of 13 milestone issues closed. The full RTL — capture, CSR, trigger, pre-trigger + windows,
-drain/CDC/UART + `scope_top`, RLE encoder **and its word-domain store-path integration**, and the
-Avalon-MM/AXI4-Lite front-ends — is done, `-Wall` clean, with all four SBY formal properties
-proving in CI, a Python host verified against a **Verilator co-simulation of the real RTL**, and a
-**real-silicon capture** on the AXC3000 (below).
-
 ## Features
 
 **Capture** — single probe group up to 512 bits, BRAM depth 2^N (N = 8..15), sampled every
@@ -49,8 +26,9 @@ cross-instance triggering (`trig_ext_i/o`) · all runtime-reconfigurable over CS
 
 **Readout** — one framed byte-stream codec over any transport: built-in **UART** (pins to a $2
 USB dongle), a **CSR** window with thin **Avalon-MM** and **AXI4-Lite** front-ends (drops into
-Platform Designer / Vivado block designs), or a raw byte stream. A Python host (in progress, #10)
-exports **VCD** (GTKWave / Surfer) and **sigrok `.sr`** (PulseView).
+Platform Designer / Vivado block designs), or a raw byte stream. The `fpgapa-scope` Python host
+exports **VCD** (GTKWave / Surfer) and **sigrok `.sr`** (PulseView), and is verified against a
+**Verilator co-simulation of the real RTL**.
 
 **Quality** — clean-room SystemVerilog, no vendor primitives, one clock-domain crossing, capture
 path never stalls on the transport · self-checking Verilator testbenches + four SBY formal proofs
@@ -64,15 +42,43 @@ including Yosys+nextpnr, which has no ILA at all**, drains without a JTAG cable 
 bus), and writes open waveform formats. Full capability matrix, honestly marked (✅ shipped /
 🟡 partial / 🔜 planned), and the gaps where the vendor GUIs still lead: **[docs/COMPARISON.md](docs/COMPARISON.md)**.
 
+## Logic usage
+
+`scope_top` is cheap, and the **logic doesn't scale with capture depth** — only the BRAM does.
+Standalone on Agilex 3 (`PROBE_W=32`, `RLE_EN=1`, `XPORT="UART"`), full synth + fit:
+
+| PROBE_W | Depth (2ᴺ) | ALMs | M20K | buffer bits |
+|---|---|---|---|---|
+| 32 | 256 (N=8)    | 1,746 / 34,000 (5%) | 6 / 262 (2%)  | 8,448 |
+| 32 | 4096 (N=12)  | 1,819 / 34,000 (5%) | 13 / 262 (5%) | 135,168 |
+| 32 | 32768 (N=15) | 1,964 / 34,000 (6%) | 69 / 262 (26%) | 1,081,344 |
+
+The capture buffer maps to exactly its raw BRAM cost (`DEPTH × STORE_W` bits) — no bloat. In the
+#12 board build (`XPORT="CSR"`, no transport FIFOs) the whole scope is **9 M20K at 4096×33**. Full
+PROBE_W×DEPTH sweep + reproducible scripts (Quartus / Vivado / nextpnr): [fpga/util_sweep/](fpga/util_sweep/).
+
 ## Hardware bring-up (M9) — done
 
 An fpga-scope instance runs on the **Arrow AXC3000** (Agilex 3 `A3CY100BM16AE7S`), instrumenting a
 **real HyperRAM controller** ([hyperram](https://github.com/fpga-professional-association/hyperram))
 as a third JTAG-Avalon slave (`XPORT="CSR"`, zero extra pins). It triggered on a live HyperBus
-`cs_n` falling edge and captured the transaction — `cs_n` toggling, `ck_en` gating, `dq_oe` through
-the CA/write phases, and the controller FSM stepping through 10 states. Build + program + capture
-walkthrough: **[fpga/axc3000/README.md](fpga/axc3000/README.md)**; the captured waveforms are in
-[docs/captures/](docs/captures/) (`axc3000_hyperram_cs.vcd` + a focused view + sigrok `.sr`).
+`cs_n` falling edge and captured a real transaction — the actual drained waveform (from
+[`docs/captures/axc3000_hyperram_cs_focus.vcd`](docs/captures/axc3000_hyperram_cs_focus.vcd)):
+
+```text
+sample   0         1         2         3          TRIGGER = sample 1 (cs_n ↓)
+         0123456789012345678901234567890123456789
+cs_n     ▔▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁  chip select asserts
+ck_en    ▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  clock enable
+dq_oe    ▁▔▔▔▔▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  DQ drive: CA bytes, then write data
+rwds_oe  ▁▁▁▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  write-mask strobe
+ctrl     345··6··············A···················  controller FSM state (hex)
+```
+
+Build + program + capture walkthrough: **[fpga/axc3000/README.md](fpga/axc3000/README.md)**. The
+full + focused VCDs, a sigrok `.sr`, a GTKWave `.gtkw` view, and the raw dump are in
+[docs/captures/](docs/captures/) — open with `gtkwave docs/captures/axc3000_hyperram_cs_focus.vcd
+docs/captures/axc3000_hyperram.gtkw`.
 
 Utilization (demo config PROBE_W=32, DEPTH_LOG2=12, RLE_EN=1, Agilex 3, timing-clean at 175 MHz):
 **4,388 ALMs (13%)**, **15 M20K (6%)** — of which the scope's 4096×33 capture buffer is exactly
@@ -90,13 +96,38 @@ bash sim/run.sh
 
 The script exits non-zero if any testbench fails; CI runs the same script on every push.
 
-## Quickstart (stub — grows with the milestones)
+## Quickstart
 
-1. Instantiate `scope_top` in your design, wire `probe[PROBE_W-1:0]` to the signals you want to
-   watch, and connect the UART pins (or the byte-stream / CSR ports). *(lands at M5, issue #8)*
-2. `pip install fpgapa-scope`, then `fpgapa-scope arm && fpgapa-scope download --vcd out.vcd`.
-   *(lands at M7, issue #10)*
-3. Open the VCD in GTKWave / Surfer / PulseView.
+**1. Instantiate** `scope_top` in your design and wire `probe` to the signals you want to watch:
+
+```systemverilog
+scope_top #(
+    .PROBE_W(32), .DEPTH_LOG2(12), .RLE_EN(1), .XPORT("UART"), .UART_DIV(16)
+) u_scope (
+    .clk(clk), .rst(rst), .probe(my_signals),         // capture domain
+    .xclk(clk), .xrst(rst),                            // transport domain (may differ)
+    .uart_rx(uart_rx), .uart_tx(uart_tx),              // to a $2 USB-UART dongle
+    .trig_ext_i(1'b0), /* …status/tie-offs… */
+);
+```
+
+Add the RTL from `rtl/` (`scope_pkg.sv`, `rtl/prim/*`, `scope_core/csr/trigger/rle/drain/top`,
+`rtl/xport/scope_uart.sv`). For a bus-attached readout instead of UART, use `XPORT="CSR"` with the
+`rtl/if/scope_avalon.sv` or `scope_axil.sv` front-end (see [fpga/axc3000/](fpga/axc3000/) for a
+worked JTAG-Avalon example).
+
+**2. Install the host** and capture:
+
+```sh
+pip install -e host                # the fpgapa-scope package (stdlib; add [serial] for UART)
+fpgapa-scope --port /dev/ttyUSB0 --baud 3000000 ping
+fpgapa-scope --port /dev/ttyUSB0 config --pretrig 256 --windows 1
+fpgapa-scope --port /dev/ttyUSB0 --probe-w 32 arm --wait \
+    --out capture.vcd --sr capture.sr --probes probes.json
+```
+
+**3. View** `capture.vcd` in GTKWave / Surfer, or `capture.sr` in PulseView. See
+[host/README.md](host/README.md) for the trigger/config CLI and the library API.
 
 ## License
 
