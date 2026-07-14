@@ -94,7 +94,11 @@ run under stock Verilator ≥ 5.0 (`--binary --timing -Wall`):
 bash sim/run.sh
 ```
 
-The script exits non-zero if any testbench fails; CI runs the same script on every push.
+The script exits non-zero if any testbench fails; CI runs the same script on every push, plus the
+four SymbiYosys formal proofs and the Python host + co-simulation suite. Full breakdown — every
+testbench, formal property, and what each proves: **[docs/VERIFICATION.md](docs/VERIFICATION.md)**.
+A nightly random-config soak (`bash sim/soak.sh`) runs seeded configs through the co-sim against
+the golden model.
 
 ## Quickstart
 

@@ -8,7 +8,7 @@ from .vcd import write_vcd
 from .sigrok import write_sr
 from . import csr
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __all__ = [
     "build_frame", "parse_frame", "parse_all", "crc16_ccitt", "Frame", "FrameError",
     "Scope", "Capture", "BytesTransport", "decode_drain", "save_capture", "load_capture",

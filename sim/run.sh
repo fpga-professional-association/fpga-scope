@@ -164,6 +164,7 @@ run_one tb_drain_cdc.sv       tb_drain_cdc        # issue #8: scope_top over byt
 run_one tb_uart.sv            tb_uart             # issue #8: bit-level UART, LSB-first + BE-CRC asserts first
 run_one tb_csr_if.sv          tb_csr_if           # issue #11: CSR matrix + BUF_DATA pop via Avalon-MM & AXI-Lite
 run_one tb_rle.sv             tb_rle              # issue #9: RLE encoder word stream vs model, bypass, expansion bound
+run_one tb_ext_trig.sv        tb_ext_trig         # issue #13: dual-instance cross-trigger (A cmp -> B trig_ext) + independence
 
 # scope_top elaboration matrix (issue #8/#9): PROBE_W {8, 512} x XPORT {UART, STREAM} x
 # RLE_EN {0, 1} beyond the fully-tested TB configs — lint-only builds, same -Wall flags.
