@@ -62,18 +62,9 @@ PROBE_W×DEPTH sweep + reproducible scripts (Quartus / Vivado / nextpnr): [fpga/
 An fpga-scope instance runs on the **Arrow AXC3000** (Agilex 3 `A3CY100BM16AE7S`), instrumenting a
 **real HyperRAM controller** ([hyperram](https://github.com/fpga-professional-association/hyperram))
 as a third JTAG-Avalon slave (`XPORT="CSR"`, zero extra pins). It triggered on a live HyperBus
-`cs_n` falling edge and captured a real transaction — the actual drained waveform (from
-[`docs/captures/axc3000_hyperram_cs_focus.vcd`](docs/captures/axc3000_hyperram_cs_focus.vcd)):
-
-```text
-sample   0         1         2         3          TRIGGER = sample 1 (cs_n ↓)
-         0123456789012345678901234567890123456789
-cs_n     ▔▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁  chip select asserts
-ck_en    ▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  clock enable
-dq_oe    ▁▔▔▔▔▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  DQ drive: CA bytes, then write data
-rwds_oe  ▁▁▁▁▁▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔  write-mask strobe
-ctrl     345··6··············A···················  controller FSM state (hex)
-```
+`cs_n` falling edge and captured a real transaction — `cs_n` asserting, `ck_en` gating the clock,
+`dq_oe` driving the CA + write bytes, and the controller FSM stepping through its states — drained
+to [`docs/captures/axc3000_hyperram_cs_focus.vcd`](docs/captures/axc3000_hyperram_cs_focus.vcd).
 
 Build + program + capture walkthrough: **[fpga/axc3000/README.md](fpga/axc3000/README.md)**. The
 full + focused VCDs, a sigrok `.sr`, a GTKWave `.gtkw` view, and the raw dump are in
